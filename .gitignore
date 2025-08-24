@@ -1,0 +1,22 @@
+# Environment variables
+.env
+gcreds.json
+*.json
+!package.json
+!render.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Local development
+.DS_Store
+
