@@ -50,7 +50,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:8000",
         "https://dragonfly-chihuahua-alhg.squarespace.com/",
-        "https://ai-chatbot2-tjm1.onrender.com",
+        "https://ai-chatbot-4bqx.onrender.com/",
         "http://localhost:8501",
         "*"
     ],
