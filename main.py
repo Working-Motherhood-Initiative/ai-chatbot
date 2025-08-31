@@ -636,22 +636,22 @@ async def analyze_cv_job_match(
         6. Be encouraging while honest about areas needing work
         
         FORMAT YOUR RESPONSE AS:
-        🎯 CV Match Score: [X]%
+          CV Match Score: [X]%
         
-        💪 Strengths:
+        Strengths:
         • [specific alignment with job requirements]
         • [relevant experience or skills]
         
-        ⚠️ Areas to Improve:
+        Areas to Improve:
         • [specific missing skills/keywords]
         • [gaps in experience]
         
-        🚀 Action Steps:
+        Action Steps:
         • [specific keywords to add]
         • [skills to develop or highlight]
         • [experience to emphasize]
         
-        💡 Pro Tip: [One encouraging insight about how their background as a mother adds value]
+        Pro Tip: [One encouraging insight about how their background as a mother adds value]
         """
 
         # Get AI analysis
