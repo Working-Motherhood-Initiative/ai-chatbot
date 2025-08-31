@@ -9,14 +9,17 @@ from dotenv import load_dotenv
 import pdfminer.high_level
 from docx import Document
 from job_fetcher import find_jobs_from_sentence, preload_job_embeddings, get_all_jobs
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import logging
 import json
 from typing import Optional, Dict, List, Tuple
 import re
 import base64
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from typing import List, Dict, Tuple, Set
+from collections import Counter
 
 # Security and authentication
 security = HTTPBearer()
@@ -68,206 +71,6 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize OpenAI client: {e}")
     raise
-
-# Google Sheets setup
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-try:
-    google_creds_b64 = os.getenv('GOOGLE_CREDENTIALS')
-    if not google_creds_b64:
-        raise Exception("GOOGLE_CREDENTIALS not found in environment variables")
-    
-    creds_dict = json.loads(base64.b64decode(google_creds_b64))
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    gs_client = gspread.authorize(creds)
-    logger.info("Successfully initialized Google Sheets client")
-except Exception as e:
-    logger.error(f"Failed to initialize Google Sheets client: {e}")
-    raise
-
-# Enhanced FAQ knowledge base
-FAQ_DATA = {
-    # CV and Resume Help
-    "cv_gaps": "Career gaps are completely normal, especially for mothers. Here's how to handle them: 1) Be honest but brief about the gap 2) Focus on any skills you developed during the break 3) Highlight volunteer work, courses, or freelance projects 4) Use a functional resume format to emphasize skills over timeline 5) Consider a brief explanation like 'Career break for family responsibilities'",
-    
-    "cv_tips": "Key CV tips for mothers: 1) Use a professional email address 2) Include a strong personal statement highlighting your unique value 3) Quantify achievements where possible 4) Include transferable skills gained through parenting 5) Keep it to 2-3 pages maximum 6) Tailor it for each application 7) Include relevant volunteer work or side projects",
-    
-    "cv_format": "Best CV formats for career returners: 1) Functional/Skills-based format - emphasizes skills over chronological work history 2) Combination format - highlights both skills and work experience 3) Avoid gaps by using years only (not months) 4) Consider a career summary at the top 5) Use clear, professional formatting with consistent fonts",
-
-    # Career Options and Flexibility
-    "flexible_careers": "Great flexible career options for moms include: Remote roles in tech (customer support, content writing, virtual assistance), Freelance work (graphic design, consulting, tutoring), Part-time positions in education or healthcare, E-commerce and online businesses, Project-based consulting in your field of expertise.",
-    
-    "remote_work": "Remote work opportunities for mothers: 1) Virtual assistance and administrative support 2) Content creation and copywriting 3) Online tutoring and teaching 4) Digital marketing and social media management 5) Graphic design and web development 6) Customer service roles 7) Data entry and bookkeeping 8) Translation services 9) Online counseling or coaching",
-    
-    "part_time_careers": "Part-time career options: 1) Teaching and education support 2) Healthcare roles (nursing, therapy) 3) Retail and customer service 4) Accounting and bookkeeping 5) Consulting in your expertise area 6) Event planning 7) Real estate 8) Freelance writing or editing 9) Childcare services 10) Administrative support",
-    
-    "freelance_tips": "Starting freelance work: 1) Identify your marketable skills 2) Create profiles on platforms like Upwork, Fiverr, or LinkedIn 3) Build a portfolio showcasing your work 4) Start with competitive rates to build reviews 5) Network with other professionals 6) Set clear boundaries and work hours 7) Keep detailed records for taxes 8) Always have contracts in place",
-
-    # Maternity Rights - Africa Focus
-    "maternity_ghana": "Ghana Maternity Rights: 1) 12 weeks paid maternity leave (Labour Act 2003) 2) Cannot be dismissed during pregnancy or maternity leave 3) Right to return to same position 4) Nursing breaks during working hours 5) Paternity leave: 2 weeks for fathers 6) Must notify employer in writing of pregnancy 7) Social Security covers part of maternity benefits 8) Right to pre and postnatal medical care",
-    
-    "maternity_nigeria": "Nigeria Maternity Rights: 1) 16 weeks maternity leave (12 weeks paid by employer + 4 weeks unpaid) 2) 2 weeks paternity leave 3) Cannot be dismissed during pregnancy/maternity 4) Right to return to same job 5) Nursing mothers entitled to nursing breaks 6) Must give 3 months notice of maternity leave 7) Some states offer additional benefits 8) National Health Insurance covers some maternity costs",
-    
-    "maternity_kenya": "Kenya Maternity Rights: 1) 4 months (120 days) maternity leave 2) 2 weeks paternity leave 3) Full pay during maternity leave 4) Cannot be dismissed during pregnancy 5) Right to return to same position 6) Nursing breaks for breastfeeding mothers 7) Must notify employer 2 months before expected delivery 8) Adoption leave also available 9) Part-time work arrangements after maternity leave",
-    
-    "maternity_africa_general": "General maternity protections across Africa: Most African countries provide 12-16 weeks maternity leave, prohibition of dismissal during pregnancy, and right to return to work. However, enforcement varies. Key countries: South Africa (4 months), Egypt (3 months), Morocco (14 weeks), Tunisia (2 months + 4 months unpaid). Always check your specific country's labor laws and company policies.",
-
-    # Work-Life Balance and Returning to Work
-    "returning_confidence": "It's normal to feel anxious about returning to work. Here are some tips: 1) Start with networking events or online communities 2) Take a refresher course in your field 3) Consider contract or part-time work first 4) Update your skills with online courses 5) Practice interviewing with friends 6) Remember that your parenting experience has given you valuable skills like multitasking, patience, and organization.",
-    
-    "work_life_balance": "Achieving work-life balance as a mother: 1) Set clear boundaries between work and personal time 2) Communicate your needs with your employer 3) Use time management tools and techniques 4) Build a support network (family, friends, childcare) 5) Be realistic about expectations 6) Take care of your physical and mental health 7) Consider flexible work arrangements 8) Don't aim for perfection in everything",
-    
-    "childcare_options": "Childcare solutions for working mothers: 1) Family daycare centers 2) Nannies or au pairs 3) Family members (grandparents, relatives) 4) Childcare co-ops with other parents 5) After-school programs 6) Employer-provided childcare 7) In-home babysitters 8) Consider backup childcare options 9) Look into government childcare support programs",
-    
-    "guilt_management": "Managing working mother guilt: 1) Remember that working can benefit your children too 2) Focus on quality time, not quantity 3) Be present when you're with your children 4) Create special traditions and routines 5) Talk to other working mothers for support 6) Practice self-compassion 7) Celebrate your achievements 8) Remember you're setting a positive example",
-
-    # Skills Development and Education
-    "skill_development": "Developing new skills while parenting: 1) Online courses (Coursera, Udemy, LinkedIn Learning) 2) YouTube tutorials for practical skills 3) Professional certifications in your field 4) Attend virtual conferences and webinars 5) Join professional associations 6) Network with industry professionals 7) Volunteer for skill-building opportunities 8) Micro-learning during small time windows",
-    
-    "digital_skills": "Essential digital skills for modern careers: 1) Basic computer proficiency (Microsoft Office, Google Workspace) 2) Social media management 3) Basic graphic design (Canva, Adobe) 4) Video conferencing tools (Zoom, Teams) 5) Project management tools (Trello, Asana) 6) Basic data analysis (Excel, Google Sheets) 7) Online communication and collaboration 8) Cloud storage and file sharing",
-    
-    "certifications": "Valuable certifications for career advancement: 1) Project Management (PMP, CAPM) 2) Digital Marketing (Google Ads, HubSpot) 3) HR certifications (SHRM, CIPD) 4) IT certifications (CompTIA, Microsoft) 5) Language certifications 6) Industry-specific certifications 7) Leadership and management courses 8) Financial management (CFA, CPA)",
-
-    # Interview and Job Search
-    "interview_prep": "Interview preparation for returning mothers: 1) Research the company thoroughly 2) Prepare examples using the STAR method 3) Practice common interview questions 4) Prepare questions to ask the interviewer 5) Plan your outfit and route in advance 6) Bring multiple copies of your resume 7) Be ready to address employment gaps positively 8) Practice with mock interviews 9) Arrive 10-15 minutes early",
-    
-    "job_search_strategies": "Effective job search strategies: 1) Use multiple job boards (LinkedIn, Indeed, company websites) 2) Network actively (professional associations, alumni networks) 3) Consider recruitment agencies 4) Attend job fairs and networking events 5) Tailor applications for each position 6) Follow up on applications professionally 7) Build your online professional presence 8) Consider informational interviews",
-    
-    "salary_negotiation": "Salary negotiation tips for mothers: 1) Research market rates for your role and location 2) Consider total compensation, not just salary 3) Prepare your case with specific achievements 4) Practice negotiation conversations 5) Don't accept the first offer immediately 6) Be confident in your value 7) Consider non-monetary benefits 8) Know when to walk away 9) Get agreements in writing",
-
-    # Entrepreneurship and Business
-    "starting_business": "Starting a business as a mother: 1) Identify a problem you can solve 2) Start small and test your idea 3) Create a simple business plan 4) Understand legal requirements and registrations 5) Build an emergency fund 6) Network with other entrepreneurs 7) Consider online business models 8) Balance family time with business development 9) Seek mentorship and support groups",
-    
-    "business_funding": "Funding options for mother entrepreneurs: 1) Personal savings and bootstrapping 2) Small business loans from banks 3) Government grants for women entrepreneurs 4) Angel investors and venture capital 5) Crowdfunding platforms 6) Business incubators and accelerators 7) Friends and family funding 8) Microfinance institutions 9) Women-focused funding organizations",
-
-    # Mental Health and Support
-    "stress_management": "Managing work stress as a mother: 1) Practice mindfulness and meditation 2) Exercise regularly, even if brief 3) Get adequate sleep when possible 4) Eat nutritious meals 5) Build a strong support network 6) Set realistic expectations 7) Learn to delegate tasks 8) Take regular breaks 9) Seek professional help when needed",
-    
-    "support_networks": "Building support networks: 1) Connect with other working mothers 2) Join professional women's groups 3) Participate in community organizations 4) Use online forums and social media groups 5) Find a mentor in your field 6) Build relationships with neighbors 7) Maintain friendships 8) Consider professional counseling or coaching",
-
-    # Legal and Rights Information
-    "workplace_discrimination": "Addressing workplace discrimination: 1) Document all incidents with dates and details 2) Report to HR or management 3) Know your company's policies 4) Seek legal advice if necessary 5) Contact labor department or equal opportunity commission 6) Keep records of your performance and contributions 7) Build alliances with colleagues 8) Consider mediation before legal action",
-    
-    "flexible_work_rights": "Rights to flexible working: Many countries now recognize rights to request flexible working arrangements. This includes: 1) Right to request (not guarantee) flexible hours 2) Employers must consider requests seriously 3) Can appeal if request is denied 4) Protection from discrimination for making request 5) Various arrangements: flextime, compressed hours, remote work, job sharing 6) Check your local employment laws for specific rights",
-
-    # Industry-Specific Advice
-    "tech_careers": "Technology careers for mothers: 1) Software development and programming 2) UX/UI design 3) Data analysis and data science 4) Cybersecurity 5) Product management 6) Technical writing 7) Quality assurance testing 8) IT support and administration 9) Many offer remote work options and good work-life balance",
-    
-    "healthcare_careers": "Healthcare careers with flexibility: 1) Nursing (many part-time and flexible options) 2) Physical therapy 3) Occupational therapy 4) Medical coding and billing 5) Healthcare administration 6) Telemedicine roles 7) Mental health counseling 8) Pharmacy technician 9) Health education and promotion",
-    
-    "education_careers": "Education career opportunities: 1) Teaching (traditional or online) 2) Tutoring and test preparation 3) Curriculum development 4) Educational technology 5) School administration 6) Training and development 7) Educational consulting 8) Special education support 9) Adult education and literacy"
-}
-
-# Question filtering system
-CAREER_KEYWORDS = {
-    'career', 'job', 'work', 'employment', 'resume', 'cv', 'interview', 'salary', 
-    'promotion', 'skills', 'experience', 'qualification', 'training', 'education',
-    'professional', 'workplace', 'office', 'remote', 'flexible', 'part-time',
-    'full-time', 'freelance', 'contract', 'internship', 'apprenticeship',
-    'maternity', 'parental', 'childcare', 'family', 'balance', 'returning',
-    'break', 'gap', 'mother', 'mom', 'parent', 'child', 'kids',
-    'tech', 'healthcare', 'education', 'marketing', 'finance', 'consulting',
-    'management', 'administration', 'customer service', 'sales', 'design',
-    'schedule', 'hours', 'benefits', 'leave', 'vacation', 'sick', 'pto',
-    'insurance', 'pension', 'retirement'
-}
-
-IRRELEVANT_TOPICS = {
-    'cook', 'recipe', 'food', 'kitchen', 'ingredients', 'meal', 'dinner',
-    'breakfast', 'lunch', 'jollof', 'rice', 'soup', 'stew', 'baking',
-    'movie', 'music', 'game', 'tv', 'show', 'entertainment', 'celebrity',
-    'sports', 'football', 'basketball', 'dance', 'party',
-    'weather', 'travel', 'vacation', 'holiday', 'relationship', 'dating',
-    'health', 'medical', 'doctor', 'fitness', 'exercise', 'shopping',
-    'fashion', 'beauty', 'makeup'
-}
-
-def is_career_related(question: str) -> Tuple[bool, str]:
-    """Check if a question is career-related."""
-    question_lower = question.lower()
-    
-    common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'how', 'what', 'when', 'where', 'why', 'can', 'could', 'should', 'would', 'do', 'does', 'did', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'will', 'shall', 'may', 'might', 'must', 'need', 'want', 'like', 'get', 'got', 'make', 'made', 'take', 'took', 'give', 'gave', 'tell', 'told', 'say', 'said', 'know', 'knew', 'think', 'thought', 'see', 'saw', 'come', 'came', 'go', 'went', 'find', 'found', 'help', 'please', 'thank', 'thanks', 'hello', 'hi', 'hey'}
-    
-    words = set(re.findall(r'\b\w+\b', question_lower))
-    meaningful_words = words - common_words
-    
-    career_matches = meaningful_words.intersection(CAREER_KEYWORDS)
-    irrelevant_matches = meaningful_words.intersection(IRRELEVANT_TOPICS)
-    
-    if irrelevant_matches and not career_matches:
-        return False, f"This appears to be about {', '.join(list(irrelevant_matches)[:3])} which is outside my area of expertise."
-    
-    if career_matches:
-        return True, "Career-related question detected"
-    
-    work_life_phrases = [
-        'work life balance', 'working mom', 'working mother', 'career and family',
-        'juggling work', 'returning to work', 'career break', 'professional development'
-    ]
-    
-    if any(phrase in question_lower for phrase in work_life_phrases):
-        return True, "Work-life balance question detected"
-    
-    if len(meaningful_words) < 3:
-        return True, "Question needs clarification"
-    
-    return False, "This doesn't appear to be related to career or work topics."
-
-def get_redirect_message(question: str, reason: str) -> str:
-    """Generate a helpful redirect message for off-topic questions."""
-    messages = [
-        f"I'm Motherboard Career Assistant, specialized in helping mothers with career and work-related questions. {reason}",
-        "",
-        "I can help you with:",
-        "• Job searching and career opportunities",
-        "• CV/resume reviews and tips", 
-        "• Career guidance and path planning",
-        "• Work-life balance for mothers",
-        "• Returning to work after career breaks",
-        "• Flexible work arrangements",
-        "• Interview preparation",
-        "• Professional development",
-        "• Maternity rights in Africa (Ghana, Nigeria, Kenya)",
-        "",
-        "What career or work-related question can I help you with today?"
-    ]
-    return "\n".join(messages)
-
-def search_faq(query: str) -> list:
-    """Search FAQ data for relevant entries based on query keywords"""
-    query_lower = query.lower()
-    relevant_faqs = []
-    
-    for key, answer in FAQ_DATA.items():
-        key_words = key.replace("_", " ")
-        if (key_words in query_lower or 
-            any(word in query_lower for word in key_words.split()) or
-            any(word in answer.lower() for word in query_lower.split() if len(word) > 3)):
-            relevant_faqs.append({
-                "topic": key,
-                "answer": answer,
-                "relevance_score": len([word for word in query_lower.split() if word in answer.lower()])
-            })
-    
-    relevant_faqs.sort(key=lambda x: x["relevance_score"], reverse=True)
-    return relevant_faqs[:3]
-
-def get_faq_response(question: str) -> tuple:
-    """Get FAQ response with better matching logic"""
-    question_lower = question.lower()
-    
-    for key, answer in FAQ_DATA.items():
-        key_phrases = key.replace("_", " ").split()
-        if any(phrase in question_lower for phrase in key_phrases):
-            related_topics = [k for k in FAQ_DATA.keys() if k != key][:5]
-            return answer, related_topics
-    
-    relevant_faqs = search_faq(question)
-    if relevant_faqs and relevant_faqs[0]["relevance_score"] > 0:
-        best_match = relevant_faqs[0]
-        related_topics = [faq["topic"] for faq in relevant_faqs[1:]]
-        return best_match["answer"], related_topics
-    
-    return None, list(FAQ_DATA.keys())[:5]
 
 # Utility functions
 def extract_text_from_pdf(file):
@@ -323,6 +126,205 @@ def get_ai_response(messages: List[Dict], max_tokens: int = 500) -> str:
     except Exception as e:
         logger.error(f"OpenAI API error: {e}")
         return "I'm sorry, I'm having trouble processing your request right now. Please try again later."
+
+def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title: str) -> Dict:
+    keyword_score = calculate_keyword_match(cv_text, job_description)
+    skills_score = calculate_skills_match(cv_text, job_description)
+    experience_score = calculate_experience_match(cv_text, job_description, job_title)
+    semantic_score = calculate_semantic_similarity(cv_text, job_description)
+    
+    total_score = (
+        keyword_score * 0.30 +
+        skills_score * 0.25 +
+        experience_score * 0.25 +
+        semantic_score * 0.20
+    )
+
+    missing_keywords = find_missing_keywords(cv_text, job_description)
+    strengths = identify_strengths(cv_text, job_description)
+    
+    return {
+        "overall_match": round(total_score),
+        "breakdown": {
+            "keyword_match": round(keyword_score),
+            "skills_match": round(skills_score), 
+            "experience_match": round(experience_score),
+            "semantic_similarity": round(semantic_score)
+        },
+        "missing_keywords": missing_keywords,
+        "strengths": strengths
+    }
+
+def calculate_keyword_match(cv_text: str, job_description: str) -> float:
+    """Calculate percentage of important job keywords found in CV"""
+    job_keywords = extract_important_keywords(job_description)
+    
+    if not job_keywords:
+        return 50.0
+    
+    cv_lower = cv_text.lower()
+    matches = sum(1 for keyword in job_keywords if keyword.lower() in cv_lower)
+    
+    return (matches / len(job_keywords)) * 100
+
+def extract_important_keywords(text: str) -> List[str]:
+    """Extract important keywords from job description"""
+    # Technical skills pattern
+    tech_pattern = r'\b(python|javascript|java|react|angular|sql|html|css|git|aws|azure|docker|kubernetes|salesforce|hubspot|excel|powerpoint|google analytics|photoshop|illustrator|figma|canva)\b'
+    
+    # Soft skills pattern  
+    soft_pattern = r'\b(leadership|management|communication|teamwork|problem[\-\s]solving|analytical|creative|organized|customer service|project management)\b'
+    
+    # Industry terms
+    industry_pattern = r'\b(marketing|sales|finance|healthcare|education|technology|consulting|administration|operations|human resources)\b'
+    
+    keywords = []
+    for pattern in [tech_pattern, soft_pattern, industry_pattern]:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        keywords.extend(matches)
+    
+    # Extract capitalized terms (likely tools/skills)
+    capitalized = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*\b', text)
+    keywords.extend([cap for cap in capitalized if len(cap) > 2 and cap.isupper() == False])
+    
+    return list(set(keywords))
+
+def calculate_skills_match(cv_text: str, job_description: str) -> float:
+    """Calculate skills overlap percentage"""
+    common_skills = [
+        'leadership', 'management', 'communication', 'teamwork', 'problem solving',
+        'analytical', 'creative', 'organized', 'customer service', 'sales',
+        'marketing', 'project management', 'time management', 'multitasking',
+        'microsoft office', 'excel', 'powerpoint', 'google analytics',
+        'social media', 'content creation', 'data analysis'
+    ]
+    
+    cv_lower = cv_text.lower()
+    job_lower = job_description.lower()
+    
+    # Find skills mentioned in job
+    job_skills = [skill for skill in common_skills if skill in job_lower]
+    
+    if not job_skills:
+        return 60.0
+    
+    # Count CV skills that match job requirements
+    cv_matches = [skill for skill in job_skills if skill in cv_lower]
+    
+    return (len(cv_matches) / len(job_skills)) * 100
+
+def calculate_experience_match(cv_text: str, job_description: str, job_title: str) -> float:
+    """Calculate experience relevance"""
+    # Look for years requirement in job
+    years_pattern = r'(\d+)\+?\s*years?\s*(?:of\s*)?(?:experience|exp)'
+    job_years_match = re.search(years_pattern, job_description, re.IGNORECASE)
+    required_years = int(job_years_match.group(1)) if job_years_match else None
+    
+    # Estimate CV years of experience
+    cv_years = estimate_cv_experience_years(cv_text)
+    
+    # Calculate experience score
+    if required_years and cv_years:
+        if cv_years >= required_years:
+            exp_score = 100
+        elif cv_years >= required_years * 0.8:
+            exp_score = 85
+        elif cv_years >= required_years * 0.6:
+            exp_score = 70
+        else:
+            exp_score = 50
+    else:
+        exp_score = 75  # Neutral when can't determine
+    
+    # Check for relevant job title/industry mentions
+    title_words = job_title.lower().split()
+    cv_lower = cv_text.lower()
+    title_relevance = sum(20 for word in title_words if len(word) > 3 and word in cv_lower)
+    
+    return min(100, (exp_score + title_relevance) / 2)
+
+def estimate_cv_experience_years(cv_text: str) -> int:
+    """Estimate total years of experience from CV"""
+    # Look for employment date ranges
+    date_ranges = re.findall(r'(20\d{2}|19\d{2})\s*[-–]\s*(20\d{2}|present|current)', cv_text, re.IGNORECASE)
+    
+    total_years = 0
+    for start_str, end_str in date_ranges:
+        start_year = int(start_str)
+        end_year = 2025 if end_str.lower() in ['present', 'current'] else int(end_str)
+        total_years += max(0, end_year - start_year)
+    
+    return total_years
+
+def calculate_semantic_similarity(cv_text: str, job_description: str) -> float:
+    """Calculate semantic similarity using TF-IDF"""
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words='english',
+            max_features=500,
+            ngram_range=(1, 2)
+        )
+        
+        documents = [cv_text[:2000], job_description[:1000]]  # Limit length
+        tfidf_matrix = vectorizer.fit_transform(documents)
+        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        
+        return similarity * 100
+        
+    except Exception as e:
+        logger.warning(f"Semantic similarity calculation failed: {e}")
+        return 50.0
+
+def find_missing_keywords(cv_text: str, job_description: str) -> List[str]:
+    """Find job keywords missing from CV"""
+    job_keywords = extract_important_keywords(job_description)
+    cv_lower = cv_text.lower()
+    
+    missing = [kw for kw in job_keywords if kw.lower() not in cv_lower]
+    return missing[:6]
+
+def identify_strengths(cv_text: str, job_description: str) -> List[str]:
+    """Identify matching strengths between CV and job"""
+    job_keywords = extract_important_keywords(job_description)
+    cv_lower = cv_text.lower()
+    
+    strengths = [kw for kw in job_keywords if kw.lower() in cv_lower]
+    return strengths[:5]
+
+def generate_improvement_areas(cv_text: str, job_description: str, keyword_score: float, skills_score: float, experience_score: float, semantic_score: float) -> List[str]:
+    """Generate specific improvement areas in sentence format based on scores"""
+    improvements = []
+    
+    # Keyword improvements
+    if keyword_score < 40:
+        missing_keywords = find_missing_keywords(cv_text, job_description)
+        if missing_keywords:
+            key_terms = ", ".join(missing_keywords[:3])
+            improvements.append(f"Include more relevant industry keywords such as {key_terms} to better align with the job requirements.")
+    
+    # Skills improvements
+    if skills_score < 50:
+        improvements.append("Highlight transferable skills like project management, stakeholder collaboration, and analytical thinking that apply to this role.")
+    
+    # Experience improvements
+    if experience_score < 40:
+        improvements.append("Emphasize any experience that relates to the target industry, including volunteer work, side projects, or relevant coursework.")
+    
+    # Semantic/content improvements
+    if semantic_score < 35:
+        improvements.append("Reframe your experience using language and terminology that's more aligned with the target role and industry.")
+    
+    # Overall low score improvements
+    overall_score = (keyword_score + skills_score + experience_score + semantic_score) / 4
+    if overall_score < 30:
+        improvements.append("Consider gaining relevant experience through volunteering, online courses, or networking in the target industry before applying.")
+    
+    # If CV is tech-heavy but job isn't
+    tech_keywords = ['python', 'sql', 'api', 'cloud', 'programming', 'automation']
+    if any(keyword.lower() in cv_text.lower() for keyword in tech_keywords) and not any(keyword.lower() in job_description.lower() for keyword in tech_keywords):
+        improvements.append("Focus on how your technical skills can solve problems in this industry rather than listing technical tools alone.")
+    
+    return improvements[:4]  # Limit to 4 most important improvements
 
 # Startup event
 @app.on_event("startup")
@@ -383,18 +385,8 @@ async def root():
             </div>
             
             <div class="endpoint">
-                <span class="method">POST</span> <code>/career-path</code>
-                <p>Get personalized career guidance</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/subscribe</code>
-                <p>Subscribe for job alerts and notifications</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/faq</code>
-                <p>Ask questions about career, work-life balance, maternity rights</p>
+                <span class="method">POST</span> <code>/cv-job-match</code>
+                <p>Analyze CV match against specific job posting</p>
             </div>
             
             <div class="endpoint">
@@ -412,7 +404,7 @@ async def root():
             <code>Authorization: Bearer YOUR_API_TOKEN</code>
             
             <h2>🌍 Africa Focus</h2>
-            <p>Specialized support for working mothers in Ghana, Nigeria, and Kenya with comprehensive maternity rights information.</p>
+            <p>Specialized support for working mothers in Ghana, Nigeria, and Kenya.</p>
             
             <h2>📖 Documentation</h2>
             <p>Visit <a href="/docs">/docs</a> for interactive API documentation</p>
@@ -441,9 +433,7 @@ async def welcome_user(request: Request, token: str = Depends(verify_token)):
             "I'm here to help you with:\n"
             "🔍 **Job Search** - Find flexible, remote, and part-time opportunities\n"
             "📄 **CV Review** - Get personalized feedback on your resume\n"
-            "🎯 **Career Guidance** - Explore new career paths and opportunities\n"
-            "📧 **Job Alerts** - Subscribe to receive relevant job notifications\n"
-            "❓ **Support** - Get answers about returning to work, CV gaps, maternity rights\n"
+            "🎯 **Job Matching** - Analyze how well your CV matches specific jobs\n"
             "🌍 **Africa Focus** - Specialized support for Ghana, Nigeria, and Kenya\n\n"
             "What would you like to start with today?"
         )
@@ -453,8 +443,7 @@ async def welcome_user(request: Request, token: str = Depends(verify_token)):
         "suggestions": [
             "Upload my CV for review",
             "Search for jobs",
-            "What are maternity rights in my country?",
-            "Tell me about flexible work options"
+            "Analyze CV against a job posting"
         ]
     })
 
@@ -485,8 +474,7 @@ async def get_cv_tips(file: UploadFile = File(...), token: str = Depends(verify_
             "response": response.choices[0].message.content.strip(),
             "next_steps": [
                 "Search for relevant jobs",
-                "Get career path guidance", 
-                "Subscribe for job alerts"
+                "Analyze CV against specific job posting"
             ]
         })
     
@@ -530,9 +518,6 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             if 'embedding' in job_dict:
                 del job_dict['embedding']
             
-            # Debug: Log available keys to see what fields exist
-            logger.info(f"Available job fields: {list(job_dict.keys())}")
-            
             # Ensure important fields are included (handle various possible column names)
             cleaned_job = {}
             
@@ -568,9 +553,8 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             "total_found": len(clean_matches),
             "search_query": user_query,
             "suggestions": [
-                "Subscribe for job alerts",
-                "Get career guidance",
-                "Upload CV for better matches"
+                "Analyze CV against a specific job",
+                "Get CV feedback"
             ] if clean_matches else [
                 "Try a broader search term",
                 "Search for 'remote work'",
@@ -584,18 +568,18 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             status_code=500,
             content={"error": "Search failed", "details": str(e)}
         )
-        
+
 @app.post("/cv-job-match")
-async def analyze_cv_job_match(
+async def analyze_cv_job_match_hybrid_endpoint(
     file: UploadFile = File(...), 
     jobTitle: str = Form(...),
     company: str = Form(...),
     jobDescription: str = Form(...),
     token: str = Depends(verify_token)
 ):
-    """Analyze how well a CV matches a specific job posting"""
+    """Hybrid CV-job match analysis: Algorithmic scoring + AI explanation"""
     try:
-        # Extract CV text based on file type
+        # Extract CV text
         if file.filename.endswith(".pdf"):
             cv_content = extract_text_from_pdf(file.file)
         elif file.filename.endswith(".docx"):
@@ -606,351 +590,83 @@ async def analyze_cv_job_match(
                 content={"error": "Unsupported file type. Please upload PDF or DOCX files."}
             )
 
-        # Clean and validate inputs
         if not cv_content.strip():
             return JSONResponse(
                 status_code=400,
                 content={"error": "Could not extract text from the uploaded file."}
             )
 
-        # Prepare the analysis prompt
-        analysis_prompt = f"""
-        You are an expert career coach analyzing CV-job fit for African mothers seeking employment.
+        # STEP 1: Calculate algorithmic match scores
+        match_data = calculate_cv_job_match_hybrid(cv_content, jobDescription, jobTitle)
         
-        TASK: Analyze how well this CV matches the specific job posting and provide a detailed match score with actionable feedback.
-        
-        JOB POSTING:
-        Title: {jobTitle}
-        Company: {company}
-        Description: {jobDescription}
-        
-        CV CONTENT:
-        {cv_content[:3000]}  # Limit to first 3000 chars to stay within token limits
-        
-        ANALYSIS REQUIRED:
-        1. Calculate a match percentage (0-100%)
-        2. Identify key strengths that align with the job
-        3. Highlight specific gaps or missing elements
-        4. Provide 3-5 concrete improvement suggestions
-        5. Consider transferable skills from motherhood/life experience
-        6. Be encouraging while honest about areas needing work
-        
-        FORMAT YOUR RESPONSE AS:
-          CV Match Score: [X]%
-        
+        # STEP 2: Generate structured AI response
+        ai_prompt = f"""
+        Create a CV match analysis in this EXACT format:
+
+        **CV Match Analysis Complete!** 
+        CV Match Score: {match_data['overall_match']}%
+
         Strengths:
-        • [specific alignment with job requirements]
-        • [relevant experience or skills]
-        
+        - [Identify 2-3 specific strengths from the CV that align with the job, written as complete sentences]
+
         Areas to Improve:
-        • [specific missing skills/keywords]
-        • [gaps in experience]
-        
+        - [Identify 2-3 specific areas where the CV lacks alignment with the job requirements, written as complete sentences]
+
         Action Steps:
-        • [specific keywords to add]
-        • [skills to develop or highlight]
-        • [experience to emphasize]
+        - [Provide 3 specific, actionable steps the candidate can take to improve their CV for this role]
+
+        Pro Tip: [One encouraging insight about how their existing experience could be valuable]
+
+        JOB: {jobTitle} at {company}
+        JOB DESCRIPTION: {jobDescription[:800]}
         
-        Pro Tip: [One encouraging insight about how their background as a mother adds value]
+        ALGORITHMIC SCORES:
+        - Keyword Match: {match_data['breakdown']['keyword_match']}%
+        - Skills Match: {match_data['breakdown']['skills_match']}%
+        - Experience Match: {match_data['breakdown']['experience_match']}%
+        
+        MISSING KEYWORDS: {', '.join(match_data['missing_keywords'])}
+        STRENGTHS FOUND: {', '.join(match_data['strengths'])}
+
+        Be encouraging but honest. Focus on actionable advice.
         """
 
-        # Get AI analysis
+        # Get AI explanation
         messages = [
             {
                 "role": "system",
-                "content": "You are a professional career coach specializing in helping mothers return to work or change careers. Provide honest, constructive, and encouraging feedback about CV-job matches."
+                "content": "You are a supportive career coach. Generate CV feedback in the exact format requested. Use complete sentences and be specific about improvements."
             },
             {
                 "role": "user",
-                "content": analysis_prompt
+                "content": ai_prompt
             }
         ]
 
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=800
-        )
-
-        analysis_result = response.choices[0].message.content.strip()
-
-        # Log the analysis for debugging
-        logger.info(f"CV match analysis completed for {jobTitle} at {company}")
+        ai_response = get_ai_response(messages, max_tokens=600)
+        response_text = ai_response
 
         return JSONResponse({
-            "response": analysis_result,
+            "response": response_text,
+            "match_score": match_data['overall_match'],
+            "breakdown": match_data['breakdown'],
+            "strengths": match_data['strengths'],
+            "missing_keywords": match_data['missing_keywords'],
             "job_title": jobTitle,
             "company": company,
             "timestamp": datetime.now().isoformat(),
             "next_steps": [
-                "Apply to this job",
+                "Apply to this job" if match_data['overall_match'] >= 70 else "Improve CV first",
                 "Search for similar positions", 
-                "Get general CV feedback",
-                "Explore career guidance"
+                "Get general CV feedback"
             ]
         })
 
     except Exception as e:
-        logger.error(f"CV job match error: {e}")
+        logger.error(f"Hybrid CV job match error: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": "Failed to analyze CV match. Please try again."}
-        )        
-
-@app.post("/career-path")
-async def suggest_career_path(request: Request, token: str = Depends(verify_token)):
-    """Provide career guidance from a single free-form query with topic filtering"""
-    try:
-        data = await request.json()
-        query = data.get("query", "").strip()
-
-        if not query:
-            return JSONResponse({
-                "response": "Please tell me about your background, experience, interests, and work preferences. For example:\n"
-                            "'I'm a former marketing manager with 10 years' experience, looking for remote work in sustainability.'",
-                "suggestions": [
-                    "Tell me about your work experience",
-                    "What career change are you considering?",
-                    "What type of work environment do you prefer?"
-                ]
-            })
-
-        # Check if query is career-related
-        is_relevant, reason = is_career_related(query)
-        
-        if not is_relevant:
-            return JSONResponse({
-                "response": get_redirect_message(query, reason),
-                "type": "redirect",
-                "suggestions": [
-                    "Tell me about your work experience",
-                    "What career change are you considering?",
-                    "What type of work environment do you prefer?"
-                ]
-            })
-
-        # Generate career advice
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a supportive career coach specializing in helping African mothers (especially in Ghana, Nigeria, and Kenya) find fulfilling work. "
-                    "From the provided query, suggest 2–3 specific, actionable career paths. "
-                    "Include practical next steps and be encouraging. Consider the African job market, cultural context, and opportunities for mothers. "
-                    "ONLY provide career and professional guidance - do not answer questions about cooking, entertainment, or other non-career topics."
-                )
-            },
-            {
-                "role": "user",
-                "content": query
-            }
-        ]
-        career_advice = get_ai_response(messages, max_tokens=600)
-
-        # Use the full query to find relevant jobs with complete data
-        relevant_jobs = find_jobs_from_sentence(query)
-        clean_jobs = []
-        for job in relevant_jobs[:3]:
-            job_dict = dict(job)
-            job_dict.pop("embedding", None)
-            
-            # Ensure important fields are standardized and included
-            cleaned_job = {}
-            
-            # Handle different possible column names for company
-            for company_field in ['Company', 'Company Name', 'Organization', 'Employer']:
-                if company_field in job_dict:
-                    cleaned_job['Company'] = job_dict[company_field]
-                    break
-            
-            # Handle application link
-            for link_field in ['Application Link or Email', 'Application Link', 'Apply Link', 'Contact Email']:
-                if link_field in job_dict:
-                    cleaned_job['Application Link'] = job_dict[link_field]
-                    break
-            
-            # Handle application deadline
-            for deadline_field in ['Application Deadline', 'Deadline', 'Application Due Date', 'Due Date']:
-                if deadline_field in job_dict:
-                    cleaned_job['Application Deadline'] = job_dict[deadline_field]
-                    break
-            
-            # Include all other fields
-            for key, value in job_dict.items():
-                if key not in cleaned_job:
-                    cleaned_job[key] = value
-            
-            clean_jobs.append(cleaned_job)
-
-        return JSONResponse({
-            "response": career_advice,
-            "relevant_jobs": clean_jobs,
-            "next_steps": [
-                "Explore recommended jobs",
-                "Subscribe for job alerts",
-                "Upload your CV for personalized feedback"
-            ]
-        })
-
-    except Exception as e:
-        logger.error(f"Career path error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Sorry, I couldn't provide career guidance right now."}
-        )
-
-@app.post("/subscribe")
-async def subscribe_user(request: Request, token: str = Depends(verify_token)):
-    """Subscribe user for job alerts"""
-    try:
-        data = await request.json()
-        email = data.get("email", "").strip()
-        interests = data.get("interests", "Not specified")
-        job_types = data.get("job_types", [])
-        name = data.get("name", "")
-        location = data.get("location", "")
-
-        if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Please provide a valid email address."}
-            )
-
-        try:
-            spreadsheet_id = os.getenv("SPREADSHEET_ID")
-            spreadsheet = gs_client.open_by_key(spreadsheet_id)
-            sheet = spreadsheet.worksheet("Subscribers")
-            
-            # Add subscriber data
-            sheet.append_row([
-                datetime.now().isoformat(),
-                name,
-                email,
-                interests,
-                ", ".join(job_types) if job_types else "All types",
-                location
-            ])
-
-            return JSONResponse({
-                "message": f"Successfully subscribed! You'll receive job alerts matching your interests at {email}.",
-                "response": "Thank you for subscribing! 🎉 You'll be the first to know about new opportunities that match your preferences.",
-                "next_steps": [
-                    "Upload your CV for better matches",
-                    "Explore current job listings",
-                    "Get career guidance"
-                ]
-            })
-
-        except Exception as e:
-            logger.error(f"Subscription error: {e}")
-            return JSONResponse(
-                status_code=500,
-                content={"error": "Sorry, there was an issue with your subscription. Please try again."}
-            )
-
-    except Exception as e:
-        logger.error(f"Subscribe endpoint error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Sorry, subscription failed. Please try again."}
-        )
-
-@app.post("/faq")
-async def handle_faq(request: Request, token: str = Depends(verify_token)):
-    """Handle FAQ and general support questions with enhanced topic filtering and search"""
-    try:
-        data = await request.json()
-        question = data.get("question", "").strip()
-        
-        if not question:
-            return JSONResponse({
-                "response": "Please ask me a question about careers, work, or professional development!",
-                "suggestions": [
-                    "What are maternity rights in Ghana?",
-                    "How do I handle career gaps in my CV?", 
-                    "What flexible career options are available?",
-                    "How can I start a business as a mother?"
-                ]
-            })
-
-        # Check if question is career-related
-        is_relevant, reason = is_career_related(question)
-        
-        if not is_relevant:
-            return JSONResponse({
-                "response": get_redirect_message(question, reason),
-                "type": "redirect",
-                "suggestions": [
-                    "Maternity rights in Africa",
-                    "Flexible work arrangements", 
-                    "Career guidance for mothers",
-                    "Starting a business as a mom"
-                ]
-            })
-
-        # Use enhanced FAQ matching
-        faq_response, related_topics = get_faq_response(question)
-
-        if faq_response:
-            return JSONResponse({
-                "response": faq_response,
-                "type": "faq",
-                "related_topics": related_topics,
-                "suggestions": [
-                    f"Tell me about {related_topics[0].replace('_', ' ')}" if related_topics else "Search for jobs",
-                    "Upload CV for feedback",
-                    "Get career guidance"
-                ]
-            })
-
-        # Use AI for other career-related questions with enhanced context
-        enhanced_context = """
-        You are Motherboard Career Assistant, specialized in helping African mothers (especially in Ghana, Nigeria, and Kenya) with career and work-related challenges. 
-        
-        You have access to comprehensive information about:
-        - Maternity rights and policies across Africa
-        - Flexible career options and remote work
-        - CV writing and interview preparation
-        - Work-life balance strategies
-        - Entrepreneurship and business development
-        - Skills development and certifications
-        - Industry-specific career advice
-        
-        IMPORTANT: Only answer questions related to careers, work, professional development, job searching, work-life balance for mothers, maternity rights, and similar professional topics. 
-        
-        Provide helpful, encouraging advice that's culturally relevant and specific to working mothers in Africa. Include practical next steps and be empowering.
-        """
-
-        messages = [
-            {
-                "role": "system", 
-                "content": enhanced_context
-            },
-            {
-                "role": "user", 
-                "content": f"Question: {question}"
-            }
-        ]
-
-        ai_response = get_ai_response(messages, max_tokens=500)
-
-        return JSONResponse({
-            "response": ai_response,
-            "type": "ai_generated",
-            "suggestions": [
-                "Learn about maternity rights",
-                "Explore flexible careers",
-                "Get CV feedback",
-                "Subscribe for job alerts"
-            ]
-        })
-
-    except Exception as e:
-        logger.error(f"FAQ error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Sorry, I couldn't answer your question right now. Please try again."}
         )
 
 @app.get("/health")
@@ -982,18 +698,13 @@ async def api_info():
         "features": [
             "Job search and matching",
             "CV analysis and tips",
-            "Career path guidance", 
-            "FAQ and support",
-            "Job alert subscriptions",
-            "Maternity rights information"
+            "CV-job match analysis"
         ],
         "endpoints": {
             "POST /welcome": "Welcome and onboard users",
             "POST /cv-tips": "CV analysis and improvement tips",
             "POST /search-jobs": "Search job opportunities",
-            "POST /career-path": "Get career guidance",
-            "POST /subscribe": "Subscribe for job alerts",
-            "POST /faq": "Ask career-related questions",
+            "POST /cv-job-match": "Analyze CV match against specific job",
             "GET /health": "Health check",
             "GET /api-info": "API information"
         },
