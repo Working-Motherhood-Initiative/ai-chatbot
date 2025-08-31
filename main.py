@@ -584,6 +584,119 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             status_code=500,
             content={"error": "Search failed", "details": str(e)}
         )
+        
+@app.post("/cv-job-match")
+async def analyze_cv_job_match(
+    file: UploadFile = File(...), 
+    jobTitle: str = Form(...),
+    company: str = Form(...),
+    jobDescription: str = Form(...),
+    token: str = Depends(verify_token)
+):
+    """Analyze how well a CV matches a specific job posting"""
+    try:
+        # Extract CV text based on file type
+        if file.filename.endswith(".pdf"):
+            cv_content = extract_text_from_pdf(file.file)
+        elif file.filename.endswith(".docx"):
+            cv_content = extract_text_from_docx(file.file)
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Unsupported file type. Please upload PDF or DOCX files."}
+            )
+
+        # Clean and validate inputs
+        if not cv_content.strip():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Could not extract text from the uploaded file."}
+            )
+
+        # Prepare the analysis prompt
+        analysis_prompt = f"""
+        You are an expert career coach analyzing CV-job fit for African mothers seeking employment.
+        
+        TASK: Analyze how well this CV matches the specific job posting and provide a detailed match score with actionable feedback.
+        
+        JOB POSTING:
+        Title: {jobTitle}
+        Company: {company}
+        Description: {jobDescription}
+        
+        CV CONTENT:
+        {cv_content[:3000]}  # Limit to first 3000 chars to stay within token limits
+        
+        ANALYSIS REQUIRED:
+        1. Calculate a match percentage (0-100%)
+        2. Identify key strengths that align with the job
+        3. Highlight specific gaps or missing elements
+        4. Provide 3-5 concrete improvement suggestions
+        5. Consider transferable skills from motherhood/life experience
+        6. Be encouraging while honest about areas needing work
+        
+        FORMAT YOUR RESPONSE AS:
+        🎯 CV Match Score: [X]%
+        
+        💪 Strengths:
+        • [specific alignment with job requirements]
+        • [relevant experience or skills]
+        
+        ⚠️ Areas to Improve:
+        • [specific missing skills/keywords]
+        • [gaps in experience]
+        
+        🚀 Action Steps:
+        • [specific keywords to add]
+        • [skills to develop or highlight]
+        • [experience to emphasize]
+        
+        💡 Pro Tip: [One encouraging insight about how their background as a mother adds value]
+        """
+
+        # Get AI analysis
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a professional career coach specializing in helping mothers return to work or change careers. Provide honest, constructive, and encouraging feedback about CV-job matches."
+            },
+            {
+                "role": "user",
+                "content": analysis_prompt
+            }
+        ]
+
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=800
+        )
+
+        analysis_result = response.choices[0].message.content.strip()
+
+        # Log the analysis for debugging
+        logger.info(f"CV match analysis completed for {jobTitle} at {company}")
+
+        return JSONResponse({
+            "response": analysis_result,
+            "job_title": jobTitle,
+            "company": company,
+            "timestamp": datetime.now().isoformat(),
+            "next_steps": [
+                "Apply to this job",
+                "Search for similar positions", 
+                "Get general CV feedback",
+                "Explore career guidance"
+            ]
+        })
+
+    except Exception as e:
+        logger.error(f"CV job match error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to analyze CV match. Please try again."}
+        )        
 
 @app.post("/career-path")
 async def suggest_career_path(request: Request, token: str = Depends(verify_token)):
