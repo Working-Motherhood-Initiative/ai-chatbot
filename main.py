@@ -603,7 +603,7 @@ async def analyze_cv_job_match_hybrid_endpoint(
         ai_prompt = f"""
         Create a CV match analysis in this EXACT format:
 
-        **CV Match Analysis Complete!** 
+        CV Match Analysis Complete!
         CV Match Score: {match_data['overall_match']}%
 
         Strengths:
@@ -617,6 +617,13 @@ async def analyze_cv_job_match_hybrid_endpoint(
 
         Pro Tip: [One encouraging insight about how their existing experience could be valuable]
 
+        IMPORTANT INSTRUCTIONS:
+        - Only mention strengths that ACTUALLY exist in the CV content provided
+        - Do NOT claim the candidate has experience they don't have
+        - Be truthful about gaps and mismatches
+        - Focus on transferable skills, not invented experience
+
+        CV CONTENT: {cv_content[:1500]}
         JOB: {jobTitle} at {company}
         JOB DESCRIPTION: {jobDescription[:800]}
         
@@ -628,7 +635,7 @@ async def analyze_cv_job_match_hybrid_endpoint(
         MISSING KEYWORDS: {', '.join(match_data['missing_keywords'])}
         STRENGTHS FOUND: {', '.join(match_data['strengths'])}
 
-        Be encouraging but honest. Focus on actionable advice.
+        Be encouraging but completely honest about what's actually in the CV.
         """
 
         # Get AI explanation
