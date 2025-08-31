@@ -522,13 +522,44 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
         
         matches = find_jobs_from_sentence(user_query)
         
-        # Remove embedding field from matches
+        # Clean matches but preserve important fields
         clean_matches = []
         for job in matches:
             job_dict = dict(job)
+            # Remove only the embedding field, keep all other fields
             if 'embedding' in job_dict:
                 del job_dict['embedding']
-            clean_matches.append(job_dict)
+            
+            # Debug: Log available keys to see what fields exist
+            logger.info(f"Available job fields: {list(job_dict.keys())}")
+            
+            # Ensure important fields are included (handle various possible column names)
+            cleaned_job = {}
+            
+            # Handle different possible column names for company
+            for company_field in ['Company', 'Company Name', 'Organization', 'Employer']:
+                if company_field in job_dict:
+                    cleaned_job['Company'] = job_dict[company_field]
+                    break
+            
+            # Handle application link
+            for link_field in ['Application Link or Email', 'Application Link', 'Apply Link', 'Contact Email']:
+                if link_field in job_dict:
+                    cleaned_job['Application Link'] = job_dict[link_field]
+                    break
+            
+            # Handle application deadline
+            for deadline_field in ['Application Deadline', 'Deadline', 'Application Due Date', 'Due Date']:
+                if deadline_field in job_dict:
+                    cleaned_job['Application Deadline'] = job_dict[deadline_field]
+                    break
+            
+            # Include all other existing fields
+            for key, value in job_dict.items():
+                if key not in cleaned_job:  # Don't overwrite the standardized field names
+                    cleaned_job[key] = value
+            
+            clean_matches.append(cleaned_job)
             
         logger.info(f"Found {len(clean_matches)} matches")
         
@@ -604,13 +635,40 @@ async def suggest_career_path(request: Request, token: str = Depends(verify_toke
         ]
         career_advice = get_ai_response(messages, max_tokens=600)
 
-        # Use the full query to find relevant jobs
+        # Use the full query to find relevant jobs with complete data
         relevant_jobs = find_jobs_from_sentence(query)
         clean_jobs = []
         for job in relevant_jobs[:3]:
             job_dict = dict(job)
             job_dict.pop("embedding", None)
-            clean_jobs.append(job_dict)
+            
+            # Ensure important fields are standardized and included
+            cleaned_job = {}
+            
+            # Handle different possible column names for company
+            for company_field in ['Company', 'Company Name', 'Organization', 'Employer']:
+                if company_field in job_dict:
+                    cleaned_job['Company'] = job_dict[company_field]
+                    break
+            
+            # Handle application link
+            for link_field in ['Application Link or Email', 'Application Link', 'Apply Link', 'Contact Email']:
+                if link_field in job_dict:
+                    cleaned_job['Application Link'] = job_dict[link_field]
+                    break
+            
+            # Handle application deadline
+            for deadline_field in ['Application Deadline', 'Deadline', 'Application Due Date', 'Due Date']:
+                if deadline_field in job_dict:
+                    cleaned_job['Application Deadline'] = job_dict[deadline_field]
+                    break
+            
+            # Include all other fields
+            for key, value in job_dict.items():
+                if key not in cleaned_job:
+                    cleaned_job[key] = value
+            
+            clean_jobs.append(cleaned_job)
 
         return JSONResponse({
             "response": career_advice,
