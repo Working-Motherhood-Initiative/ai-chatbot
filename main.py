@@ -21,6 +21,23 @@ import numpy as np
 from typing import List, Dict, Tuple, Set
 from collections import Counter
 
+# Add this import at the top of your main.py file, along with your other imports
+from assessment_questions import (
+    ASSESSMENT_QUESTIONS,
+    calculate_assessment_scores,
+    generate_assessment_feedback,
+    get_assessment_instructions,
+    validate_responses
+)
+
+# Add this Pydantic model with your other models (if you don't already have it)
+from pydantic import BaseModel
+from typing import Dict, Any
+
+class AssessmentResponse(BaseModel):
+    career_readiness: Dict[str, str]
+    work_life_balance: Dict[str, str]
+
 # Security and authentication
 security = HTTPBearer()
 API_TOKEN = os.getenv("API_TOKEN")
@@ -355,19 +372,20 @@ async def root():
             h1 { color: #667eea; }
             .endpoint { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #667eea; }
             .method { color: #28a745; font-weight: bold; }
+            .new-feature { background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%); border-left: 4px solid #764ba2; }
             code { background: #e9ecef; padding: 2px 6px; border-radius: 3px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>👩‍💼 Motherboard Career Assistant API</h1>
+            <h1>Motherboard Career Assistant API</h1>
             <p>Welcome to the Motherboard Career Assistant API - helping mothers navigate work and career!</p>
             
-            <h2>🚀 API Status</h2>
-            <p><strong>Status:</strong> <span style="color: green;">✅ Running</span></p>
-            <p><strong>Version:</strong> 1.0.0</p>
+            <h2>API Status</h2>
+            <p>Status: <span style="color: green;">Running</span></p>
+            <p>Version: 1.0.0</p>
             
-            <h2>📋 Available Endpoints</h2>
+            <h2>Available Endpoints</h2>
             
             <div class="endpoint">
                 <span class="method">POST</span> <code>/welcome</code>
@@ -389,6 +407,21 @@ async def root():
                 <p>Analyze CV match against specific job posting</p>
             </div>
             
+            <div class="endpoint new-feature">
+                <span class="method">GET</span> <code>/assessment-questions</code>
+                <p>NEW! Get MomFit assessment questions and instructions</p>
+            </div>
+            
+            <div class="endpoint new-feature">
+                <span class="method">POST</span> <code>/momfit-assessment</code>
+                <p>NEW! Submit MomFit assessment responses and get personalized feedback</p>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method">GET</span> <code>/assessment-stats</code>
+                <p>Get assessment statistics and metadata</p>
+            </div>
+            
             <div class="endpoint">
                 <span class="method">GET</span> <code>/health</code>
                 <p>Health check endpoint</p>
@@ -399,14 +432,23 @@ async def root():
                 <p>Interactive API documentation (Swagger UI)</p>
             </div>
             
-            <h2>🔐 Authentication</h2>
+            <h2>Authentication</h2>
             <p>Most endpoints require authentication. Include your API token in the Authorization header:</p>
             <code>Authorization: Bearer YOUR_API_TOKEN</code>
             
-            <h2>🌍 Africa Focus</h2>
+            <h2>New Feature: MomFit Mini Assessment</h2>
+            <p>Our new assessment helps working mothers understand their career readiness and work-life balance:</p>
+            <ul>
+                <li>20 Questions: 10 career readiness + 10 work-life balance</li>
+                <li>5-7 Minutes: Quick but comprehensive evaluation</li>
+                <li>Personalized Feedback: Tailored recommendations based on responses</li>
+                <li>Scoring: 0-100 scale with detailed breakdowns</li>
+            </ul>
+            
+            <h2>Africa Focus</h2>
             <p>Specialized support for working mothers in Ghana, Nigeria, and Kenya.</p>
             
-            <h2>📖 Documentation</h2>
+            <h2>Documentation</h2>
             <p>Visit <a href="/docs">/docs</a> for interactive API documentation</p>
         </div>
     </body>
@@ -429,18 +471,20 @@ async def welcome_user(request: Request, token: str = Depends(verify_token)):
         welcome_message = f"Welcome back, {user_name}! How can I help you today?"
     else:
         welcome_message = (
-            f"Hi {user_name}! 👋 Welcome to Motherboard - your career companion for navigating work and motherhood.\n\n"
+            f"Hi {user_name}! Welcome to Motherboard - your career companion for navigating work and motherhood.\n\n"
             "I'm here to help you with:\n"
-            "🔍 **Job Search** - Find flexible, remote, and part-time opportunities\n"
-            "📄 **CV Review** - Get personalized feedback on your resume\n"
-            "🎯 **Job Matching** - Analyze how well your CV matches specific jobs\n"
-            "🌍 **Africa Focus** - Specialized support for Ghana, Nigeria, and Kenya\n\n"
+            "Job Search - Find flexible, remote, and part-time opportunities\n"
+            "CV Review - Get personalized feedback on your resume\n"
+            "Job Matching - Analyze how well your CV matches specific jobs\n"
+            "MomFit Assessment - Understand your career readiness and work-life balance\n"
+            "Africa Focus - Specialized support for Ghana, Nigeria, and Kenya\n\n"
             "What would you like to start with today?"
         )
 
     return JSONResponse({
         "response": welcome_message,
         "suggestions": [
+            "Take the MomFit Assessment",
             "Upload my CV for review",
             "Search for jobs",
             "Analyze CV against a job posting"
@@ -473,6 +517,7 @@ async def get_cv_tips(file: UploadFile = File(...), token: str = Depends(verify_
         return JSONResponse({
             "response": response.choices[0].message.content.strip(),
             "next_steps": [
+                "Take MomFit Assessment",
                 "Search for relevant jobs",
                 "Analyze CV against specific job posting"
             ]
@@ -554,7 +599,8 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             "search_query": user_query,
             "suggestions": [
                 "Analyze CV against a specific job",
-                "Get CV feedback"
+                "Get CV feedback",
+                "Take MomFit Assessment"
             ] if clean_matches else [
                 "Try a broader search term",
                 "Search for 'remote work'",
@@ -665,6 +711,7 @@ async def analyze_cv_job_match_hybrid_endpoint(
             "next_steps": [
                 "Apply to this job" if match_data['overall_match'] >= 70 else "Improve CV first",
                 "Search for similar positions", 
+                "Take MomFit Assessment",
                 "Get general CV feedback"
             ]
         })
@@ -676,52 +723,215 @@ async def analyze_cv_job_match_hybrid_endpoint(
             content={"error": "Failed to analyze CV match. Please try again."}
         )
 
+# NEW ASSESSMENT ENDPOINTS
+
+@app.get("/assessment-questions")
+async def get_assessment_questions(token: str = Depends(verify_token)):
+    """Get assessment questions and instructions"""
+    try:
+        instructions = get_assessment_instructions()
+        
+        return JSONResponse({
+            "questions": ASSESSMENT_QUESTIONS,
+            "instructions": instructions,
+            "metadata": {
+                "total_questions": len(ASSESSMENT_QUESTIONS["career_readiness"]) + len(ASSESSMENT_QUESTIONS["work_life_balance"]),
+                "career_readiness_questions": len(ASSESSMENT_QUESTIONS["career_readiness"]),
+                "work_life_balance_questions": len(ASSESSMENT_QUESTIONS["work_life_balance"]),
+                "estimated_time_minutes": 7,
+                "scoring_scale": "1-5 (Strongly Disagree to Strongly Agree)"
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Assessment questions error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve assessment questions"}
+        )
+
+@app.post("/momfit-assessment")
+async def submit_momfit_assessment(
+    responses: AssessmentResponse,
+    token: str = Depends(verify_token)
+):
+    """Submit MomFit assessment responses and get personalized feedback"""
+    try:
+        # Validate responses using the correct validation function
+        is_valid, error_message = validate_responses(responses.dict())
+        if not is_valid:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid responses", "details": error_message}
+            )
+        
+        # Calculate scores
+        scores = calculate_assessment_scores(responses.dict())
+        
+        # Generate personalized feedback
+        feedback = generate_assessment_feedback(scores)
+        
+        return JSONResponse({
+            "scores": {
+                "career_readiness": scores["career_readiness_score"],
+                "work_life_balance": scores["work_life_balance_score"], 
+                "overall": scores["overall_score"]
+            },
+            "detailed_scores": scores,
+            "feedback": feedback,
+            "timestamp": datetime.now().isoformat(),
+            "next_steps": [
+                "Search for jobs that match your readiness level",
+                "Get CV feedback to improve your profile",
+                "Explore work-life balance resources",
+                "Connect with our career coaching services"
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"MomFit assessment error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to process assessment", "details": str(e)}
+        )
+
+@app.get("/assessment-stats")
+async def get_assessment_stats(token: str = Depends(verify_token)):
+    """Get assessment statistics and metadata"""
+    try:
+        return JSONResponse({
+            "assessment_info": {
+                "name": "MomFit Mini Assessment",
+                "version": "1.0.0",
+                "total_questions": len(ASSESSMENT_QUESTIONS["career_readiness"]) + len(ASSESSMENT_QUESTIONS["work_life_balance"]),
+                "categories": ["career_readiness", "work_life_balance"],
+                "scoring": {
+                    "scale": "1-5 Likert Scale",
+                    "range": "0-100 points",
+                    "interpretation": {
+                        "0-40": "Needs Development",
+                        "41-70": "Moderate Level", 
+                        "71-85": "Strong Level",
+                        "86-100": "Excellent Level"
+                    }
+                },
+                "estimated_time": "5-7 minutes",
+                "target_audience": "Working mothers and mothers seeking to return to work"
+            },
+            "question_breakdown": {
+                "career_readiness": {
+                    "count": len(ASSESSMENT_QUESTIONS["career_readiness"]),
+                    "focus_areas": ["Skills confidence", "Career goals", "Professional development", "Job search readiness"]
+                },
+                "work_life_balance": {
+                    "count": len(ASSESSMENT_QUESTIONS["work_life_balance"]),
+                    "focus_areas": ["Time management", "Support systems", "Stress management", "Family-work integration"]
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Assessment stats error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve assessment statistics"}
+        )
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy", 
+    try:
+        # Test OpenAI connection
+        test_response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Test"}],
+            max_tokens=5
+        )
+        openai_status = "Connected"
+    except Exception:
+        openai_status = "Error"
+    
+    try:
+        # Test job data
+        jobs = get_all_jobs()
+        job_data_status = f"{len(jobs)} jobs loaded"
+    except Exception:
+        job_data_status = "Job data error"
+    
+    return JSONResponse({
+        "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0",
-        "service": "Motherboard Career Assistant API"
-    }
+        "services": {
+            "api": "Running",
+            "openai": openai_status,
+            "job_data": job_data_status,
+            "assessment": "Available"
+        },
+        "version": "1.0.0"
+    })
 
-@app.get("/test-auth")
-async def test_auth(token: str = Depends(verify_token)):
-    """Test authentication endpoint"""
-    return {
-        "message": "Authentication successful",
-        "timestamp": datetime.now().isoformat()
-    }
+# Additional utility endpoints
 
 @app.get("/api-info")
-async def api_info():
-    """Get API information and available endpoints"""
-    return {
+async def get_api_info():
+    """Get API information and capabilities"""
+    return JSONResponse({
         "name": "Motherboard Career Assistant API",
         "version": "1.0.0",
         "description": "API for helping mothers navigate work and career",
-        "focus": "African mothers in Ghana, Nigeria, and Kenya",
-        "features": [
-            "Job search and matching",
-            "CV analysis and tips",
-            "CV-job match analysis"
+        "target_regions": ["Ghana", "Nigeria", "Kenya", "Global"],
+        "capabilities": [
+            "CV Analysis and Feedback",
+            "Job Search and Matching",
+            "CV-Job Match Analysis", 
+            "MomFit Career Assessment",
+            "Personalized Career Guidance"
         ],
-        "endpoints": {
-            "POST /welcome": "Welcome and onboard users",
-            "POST /cv-tips": "CV analysis and improvement tips",
-            "POST /search-jobs": "Search job opportunities",
-            "POST /cv-job-match": "Analyze CV match against specific job",
-            "GET /health": "Health check",
-            "GET /api-info": "API information"
+        "supported_file_types": ["PDF", "DOCX"],
+        "authentication": "Bearer Token Required",
+        "rate_limits": {
+            "general": "100 requests per hour",
+            "file_uploads": "20 uploads per hour"
         },
-        "timestamp": datetime.now().isoformat()
-    }
+        "contact": {
+            "support": "support@motherboard-career.com",
+            "documentation": "/docs"
+        }
+    })
+
+@app.post("/feedback")
+async def submit_feedback(request: Request, token: str = Depends(verify_token)):
+    """Submit user feedback about the service"""
+    try:
+        data = await request.json()
+        
+        rating = data.get("rating")
+        comment = data.get("comment", "")
+        feature = data.get("feature", "general")
+        user_id = data.get("user_id", "anonymous")
+        
+        # Log feedback (in production, you'd save to database)
+        logger.info(f"Feedback received - Rating: {rating}, Feature: {feature}, User: {user_id}")
+        logger.info(f"Comment: {comment}")
+        
+        return JSONResponse({
+            "message": "Thank you for your feedback! We appreciate you helping us improve Motherboard.",
+            "feedback_id": f"feedback_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Feedback submission error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to submit feedback"}
+        )
 
 # Error handlers
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Custom HTTP exception handler"""
+    """Handle HTTP exceptions"""
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -733,16 +943,21 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """General exception handler"""
-    logger.error(f"Unexpected error: {str(exc)}")
+    """Handle general exceptions"""
+    logger.error(f"Unhandled exception: {exc}")
     return JSONResponse(
         status_code=500,
         content={
-            "error": "An unexpected error occurred. Please try again later.",
+            "error": "An unexpected error occurred",
+            "message": "Please try again later or contact support",
             "timestamp": datetime.now().isoformat()
         }
     )
 
+# Startup message
 if __name__ == "__main__":
     import uvicorn
+    logger.info("Starting Motherboard Career Assistant API...")
+    logger.info("Serving mothers in Ghana, Nigeria, Kenya and beyond")
+    logger.info("Features: CV Analysis, Job Search, MomFit Assessment")
     uvicorn.run(app, host="0.0.0.0", port=8000)
