@@ -378,16 +378,7 @@ SCORING_WEIGHTS = {
 }
 
 def calculate_assessment_scores(responses: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
-    """
-    Calculate assessment scores based on user responses
-    
-    Args:
-        responses: Dictionary containing user responses for both sections
-        
-    Returns:
-        Dictionary containing calculated scores and response data
-    """
-    # Calculate career readiness score
+   #Calculate career readiness score
     career_total = 0
     career_count = 0
     for q_id, response in responses.get("career_readiness", {}).items():
@@ -425,40 +416,31 @@ def calculate_assessment_scores(responses: Dict[str, Dict[str, str]]) -> Dict[st
     }
 
 def generate_assessment_feedback(scores: Dict[str, Any]) -> str:
-    """
-    Generate personalized feedback based on assessment scores
-    
-    Args:
-        scores: Dictionary containing calculated scores
-        
-    Returns:
-        Formatted feedback string
-    """
     career_score = scores["career_readiness_score"]
     balance_score = scores["work_life_balance_score"]
     overall_score = scores["overall_score"]
     
-    feedback = f"**MomFit Assessment Results**\n\n"
-    feedback += f"**Overall Score: {overall_score}/100**\n"
+    feedback = f"MomFit Assessment Results\n\n"
+    feedback += f"Overall Score: {overall_score}/100\n"
     feedback += f"- Career Readiness: {career_score}/100\n"
     feedback += f"- Work-Life Balance: {balance_score}/100\n\n"
     
     # Overall assessment with status
     if overall_score >= 80:
-        feedback += "**Status: Ready to Thrive! 🌟**\n"
+        feedback += "Status: Ready to Thrive!\n"
         feedback += "You're in a strong position with good career confidence and work-life balance management. You're well-positioned to pursue ambitious career goals while maintaining family harmony.\n\n"
     elif overall_score >= 60:
-        feedback += "**Status: Building Momentum 💪**\n"
+        feedback += "Status: Building Momentum\n"
         feedback += "You have a solid foundation with some areas for focused improvement. With targeted effort, you can reach the next level in both career and life balance.\n\n"
     elif overall_score >= 40:
-        feedback += "**Status: Growing Strong 🌱**\n"
+        feedback += "Status: Growing Strong\n"
         feedback += "You're on a positive path with several opportunities for development. This is an exciting time to focus on building your strengths and addressing key areas.\n\n"
     else:
-        feedback += "**Status: Foundation Building 🏗️**\n"
+        feedback += "Status: Foundation Building\n"
         feedback += "This is your starting point - every expert was once a beginner! Focus on small, consistent steps to build confidence and systems that work for your family.\n\n"
     
     # Career readiness insights
-    feedback += "**Career Readiness Insights:**\n"
+    feedback += "Career Readiness Insights:\n"
     if career_score >= 75:
         feedback += "- You demonstrate strong professional confidence and skills\n"
         feedback += "- Consider leveraging your strengths to pursue stretch opportunities or leadership roles\n"
@@ -476,7 +458,7 @@ def generate_assessment_feedback(scores: Dict[str, Any]) -> str:
         feedback += "- Connect with other professional mothers for support and advice\n"
     
     # Work-life balance insights
-    feedback += "\n**Work-Life Balance Insights:**\n"
+    feedback += "\nWork-Life Balance Insights:\n"
     if balance_score >= 75:
         feedback += "- You've created a sustainable balance that works for your family\n"
         feedback += "- Your support systems and boundaries are serving you well\n"
@@ -494,42 +476,36 @@ def generate_assessment_feedback(scores: Dict[str, Any]) -> str:
         feedback += "- Prioritize your well-being - you can't pour from an empty cup\n"
     
     # Personalized action steps based on scores
-    feedback += "\n**Recommended Next Steps:**\n"
+    feedback += "\nRecommended Next Steps:\n"
     
     # Career-focused recommendations
     if career_score < 50:
-        feedback += "1. **Skill Building**: Take one online course in an area that interests you or aligns with your goals\n"
-        feedback += "2. **Network**: Join one professional group, online community, or attend a local meetup\n"
+        feedback += "1. Skill Building: Take one online course in an area that interests you or aligns with your goals\n"
+        feedback += "2. Network: Join one professional group, online community, or attend a local meetup\n"
     elif career_score < 75:
-        feedback += "1. **Opportunity Search**: Start actively looking for roles that match your goals and skills\n"
-        feedback += "2. **Skill Showcase**: Update your CV and LinkedIn to highlight your strengths and recent learning\n"
+        feedback += "1. Opportunity Search: Start actively looking for roles that match your goals and skills\n"
+        feedback += "2. Skill Showcase: Update your CV and LinkedIn to highlight your strengths and recent learning\n"
     else:
-        feedback += "1. **Leadership Growth**: Look for opportunities to lead projects or mentor others\n"
-        feedback += "2. **Strategic Planning**: Set ambitious but achievable career goals for the next 12 months\n"
+        feedback += "1. Leadership Growth: Look for opportunities to lead projects or mentor others\n"
+        feedback += "2. Strategic Planning: Set ambitious but achievable career goals for the next 12 months\n"
     
     # Balance-focused recommendations
     if balance_score < 50:
-        feedback += "3. **Support System**: Identify one area where you need more help and take steps to get it\n"
-        feedback += "4. **Self-Care**: Schedule 30 minutes of personal time twice this week - non-negotiable\n"
+        feedback += "3. Support System: Identify one area where you need more help and take steps to get it\n"
+        feedback += "4. Self-Care: Schedule 30 minutes of personal time twice this week - non-negotiable\n"
     elif balance_score < 75:
-        feedback += "3. **Boundary Setting**: Establish clearer boundaries between work and family time\n"
-        feedback += "4. **Efficiency**: Streamline one household or work process to save time and energy\n"
+        feedback += "3. Boundary Setting: Establish clearer boundaries between work and family time\n"
+        feedback += "4. Efficiency: Streamline one household or work process to save time and energy\n"
     else:
-        feedback += "3. **Growth Planning**: Set one professional goal for the next 3 months\n"
-        feedback += "4. **Help Others**: Share your balance strategies with other mothers in your network\n"
+        feedback += "3. Growth Planning: Set one professional goal for the next 3 months\n"
+        feedback += "4. Help Others: Share your balance strategies with other mothers in your network\n"
     
     # Encouraging conclusion
-    feedback += "\n**Remember**: Your journey is unique, and every small step forward matters. You're doing amazing work balancing motherhood and career aspirations. Trust yourself, be patient with the process, and celebrate your progress along the way! 💖"
+    feedback += "\nRemember: Your journey is unique, and every small step forward matters. You're doing amazing work balancing motherhood and career aspirations. Trust yourself, be patient with the process, and celebrate your progress along the way!"
     
     return feedback
 
 def get_assessment_instructions() -> Dict[str, str]:
-    """
-    Get instructions for each assessment section
-    
-    Returns:
-        Dictionary containing instructions for each section
-    """
     return {
         "career_readiness": "Answer these questions about your professional confidence and skills honestly. There are no right or wrong answers - this is about understanding where you are right now.",
         "work_life_balance": "Answer these questions about managing career and family life. Think about your current situation and typical experiences.",
@@ -538,15 +514,6 @@ def get_assessment_instructions() -> Dict[str, str]:
 
 # Validation functions
 def validate_responses(responses: Dict[str, Dict[str, str]]) -> tuple[bool, str]:
-    """
-    Validate assessment responses
-    
-    Args:
-        responses: User responses to validate
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
     if not responses:
         return False, "No responses provided"
     
@@ -588,16 +555,6 @@ def validate_responses(responses: Dict[str, Dict[str, str]]) -> tuple[bool, str]
 
 # Helper function to get question by ID
 def get_question_by_id(section: str, question_id: str) -> Dict[str, Any]:
-    """
-    Get a specific question by section and ID
-    
-    Args:
-        section: Section name ('career_readiness' or 'work_life_balance')
-        question_id: Question ID to find
-        
-    Returns:
-        Question dictionary or None if not found
-    """
     if section not in ASSESSMENT_QUESTIONS:
         return None
     
