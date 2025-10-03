@@ -784,6 +784,7 @@ async def get_cv_tips(file: UploadFile = File(...), token: str = Depends(verify_
         )
 
 
+
 @app.get("/jobs")
 async def get_all_available_jobs(token: str = Depends(verify_token)):
     """Get all available jobs from the job board"""
@@ -801,6 +802,14 @@ async def get_all_available_jobs(token: str = Depends(verify_token)):
             if 'embedding' in job_dict:
                 del job_dict['embedding']
             
+            # Get the job description - try multiple possible column names
+            description = (
+                job_dict.get("Job Description (Brief Summary)") or 
+                job_dict.get("Job Description (Brief Summary)  ") or  # Note: extra spaces
+                job_dict.get("Job Description") or 
+                "N/A"
+            )
+            
             # Structure job with all required fields
             complete_job = {
                 "job_id": idx,
@@ -808,7 +817,7 @@ async def get_all_available_jobs(token: str = Depends(verify_token)):
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
                 "job_type": job_dict.get("Job Type", "N/A"),
                 "industry": job_dict.get("Industry", "N/A"),
-                "job_description": job_dict.get("Job Description (Brief Summary)", job_dict.get("Job Description", "N/A")),
+                "job_description": description,  # Standardized field name
                 "location": job_dict.get("Location", "N/A"),
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
@@ -816,9 +825,9 @@ async def get_all_available_jobs(token: str = Depends(verify_token)):
                 # Include any additional fields from your Google Sheet
                 "additional_fields": {k: v for k, v in job_dict.items() if k not in [
                     "Job Title", "Company Name", "Company", "Job Type", "Industry",
-                    "Job Description (Brief Summary)", "Job Description", "Location",
-                    "Application Link or Email", "Application Link", "Application Deadline",
-                    "Skills Required"
+                    "Job Description (Brief Summary)", "Job Description (Brief Summary)  ",
+                    "Job Description", "Location", "Application Link or Email", 
+                    "Application Link", "Application Deadline", "Skills Required"
                 ]}
             }
             
@@ -848,41 +857,33 @@ async def get_all_available_jobs(token: str = Depends(verify_token)):
         )
 
 
+# Optional: Keep search functionality as a separate endpoint if needed later
 @app.post("/search-jobs")
 async def search_jobs(request: Request, token: str = Depends(verify_token)):
-    """Search for jobs based on user query - returns complete job details"""
+    """Search for specific jobs (optional - if you want filtering later)"""
     try:
         data = await request.json()
         user_query = data.get("query", "")
-        logger.info(f"Received search query: {user_query}")
         
         if not user_query.strip():
+            # If no query, redirect to get all jobs
             return JSONResponse({
-                "error": "Please provide a search query",
-                "suggestions": [
-                    "Remote marketing jobs",
-                    "Part-time healthcare positions", 
-                    "Flexible teaching opportunities",
-                    "Customer service work from home"
-                ]
+                "message": "No search query provided. Use GET /jobs to see all available jobs.",
+                "redirect": "/jobs"
             })
         
-        # Load jobs first to verify data
-        jobs = get_all_jobs()
-        logger.info(f"Total jobs available: {len(jobs)}")
+        logger.info(f"Received search query: {user_query}")
         
         matches = find_jobs_from_sentence(user_query)
         
-        # Return complete job details with all fields from Google Sheet
+        # Format matching jobs
         complete_jobs = []
         for idx, job in enumerate(matches):
             job_dict = dict(job)
             
-            # Remove only the embedding field
             if 'embedding' in job_dict:
                 del job_dict['embedding']
             
-            # Structure job with all required fields
             complete_job = {
                 "job_id": idx,
                 "job_title": job_dict.get("Job Title", "N/A"),
@@ -894,33 +895,15 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
                 "skills_required": job_dict.get("Skills Required", "N/A"),
-                # Include any additional fields from your Google Sheet
-                "additional_fields": {k: v for k, v in job_dict.items() if k not in [
-                    "Job Title", "Company Name", "Company", "Job Type", "Industry",
-                    "Job Description (Brief Summary)", "Job Description", "Location",
-                    "Application Link or Email", "Application Link", "Application Deadline",
-                    "Skills Required"
-                ]}
             }
             
             complete_jobs.append(complete_job)
-            
-        logger.info(f"Found {len(complete_jobs)} matches")
         
         return JSONResponse({
             "jobs": complete_jobs,
             "total_found": len(complete_jobs),
             "search_query": user_query,
-            "message": f"Found {len(complete_jobs)} job(s) matching '{user_query}'. Click on any job to view details and apply.",
-            "suggestions": [
-                "Analyze your CV against a job (privacy protected)",
-                "Get CV feedback (privacy protected)",
-                "Take MomFit Assessment"
-            ] if complete_jobs else [
-                "Try a broader search term",
-                "Search for 'remote work'",
-                "Look for 'part-time jobs'"
-            ]
+            "message": f"Found {len(complete_jobs)} job(s) matching '{user_query}'."
         })
         
     except Exception as e:
