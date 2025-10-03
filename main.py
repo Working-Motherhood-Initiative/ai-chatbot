@@ -783,9 +783,74 @@ async def get_cv_tips(file: UploadFile = File(...), token: str = Depends(verify_
             content={"error": "Failed to analyze CV. Please try again."}
         )
 
+
+@app.get("/jobs")
+async def get_all_available_jobs(token: str = Depends(verify_token)):
+    """Get all available jobs from the job board"""
+    try:
+        # Load all jobs from Google Sheet
+        jobs = get_all_jobs()
+        logger.info(f"Fetching all {len(jobs)} available jobs")
+        
+        # Format all jobs with complete details
+        complete_jobs = []
+        for idx, job in enumerate(jobs):
+            job_dict = dict(job)
+            
+            # Remove only the embedding field
+            if 'embedding' in job_dict:
+                del job_dict['embedding']
+            
+            # Structure job with all required fields
+            complete_job = {
+                "job_id": idx,
+                "job_title": job_dict.get("Job Title", "N/A"),
+                "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
+                "job_type": job_dict.get("Job Type", "N/A"),
+                "industry": job_dict.get("Industry", "N/A"),
+                "job_description": job_dict.get("Job Description (Brief Summary)", job_dict.get("Job Description", "N/A")),
+                "location": job_dict.get("Location", "N/A"),
+                "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
+                "application_deadline": job_dict.get("Application Deadline", "N/A"),
+                "skills_required": job_dict.get("Skills Required", "N/A"),
+                # Include any additional fields from your Google Sheet
+                "additional_fields": {k: v for k, v in job_dict.items() if k not in [
+                    "Job Title", "Company Name", "Company", "Job Type", "Industry",
+                    "Job Description (Brief Summary)", "Job Description", "Location",
+                    "Application Link or Email", "Application Link", "Application Deadline",
+                    "Skills Required"
+                ]}
+            }
+            
+            complete_jobs.append(complete_job)
+            
+        logger.info(f"Successfully formatted {len(complete_jobs)} jobs")
+        
+        return JSONResponse({
+            "jobs": complete_jobs,
+            "total_jobs": len(complete_jobs),
+            "message": f"Showing all {len(complete_jobs)} available job(s). Click on any job to view details and apply.",
+            "suggestions": [
+                "Analyze your CV against a job (privacy protected)",
+                "Get CV feedback (privacy protected)",
+                "Take MomFit Assessment"
+            ] if complete_jobs else [
+                "No jobs available at the moment",
+                "Check back soon for new opportunities"
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching jobs: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to fetch jobs", "details": str(e)}
+        )
+
+
 @app.post("/search-jobs")
 async def search_jobs(request: Request, token: str = Depends(verify_token)):
-    """Search for jobs based on user query"""
+    """Search for jobs based on user query - returns complete job details"""
     try:
         data = await request.json()
         user_query = data.get("query", "")
@@ -808,53 +873,50 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
         
         matches = find_jobs_from_sentence(user_query)
         
-        # Clean matches but preserve important fields
-        clean_matches = []
-        for job in matches:
+        # Return complete job details with all fields from Google Sheet
+        complete_jobs = []
+        for idx, job in enumerate(matches):
             job_dict = dict(job)
-            # Remove only the embedding field, keep all other fields
+            
+            # Remove only the embedding field
             if 'embedding' in job_dict:
                 del job_dict['embedding']
             
-            # Ensure important fields are included (handle various possible column names)
-            cleaned_job = {}
+            # Structure job with all required fields
+            complete_job = {
+                "job_id": idx,
+                "job_title": job_dict.get("Job Title", "N/A"),
+                "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
+                "job_type": job_dict.get("Job Type", "N/A"),
+                "industry": job_dict.get("Industry", "N/A"),
+                "job_description": job_dict.get("Job Description (Brief Summary)", job_dict.get("Job Description", "N/A")),
+                "location": job_dict.get("Location", "N/A"),
+                "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
+                "application_deadline": job_dict.get("Application Deadline", "N/A"),
+                "skills_required": job_dict.get("Skills Required", "N/A"),
+                # Include any additional fields from your Google Sheet
+                "additional_fields": {k: v for k, v in job_dict.items() if k not in [
+                    "Job Title", "Company Name", "Company", "Job Type", "Industry",
+                    "Job Description (Brief Summary)", "Job Description", "Location",
+                    "Application Link or Email", "Application Link", "Application Deadline",
+                    "Skills Required"
+                ]}
+            }
             
-            # Handle different possible column names for company
-            for company_field in ['Company', 'Company Name', 'Organization', 'Employer']:
-                if company_field in job_dict:
-                    cleaned_job['Company'] = job_dict[company_field]
-                    break
+            complete_jobs.append(complete_job)
             
-            # Handle application link
-            for link_field in ['Application Link or Email', 'Application Link', 'Apply Link', 'Contact Email']:
-                if link_field in job_dict:
-                    cleaned_job['Application Link'] = job_dict[link_field]
-                    break
-            
-            # Handle application deadline
-            for deadline_field in ['Application Deadline', 'Deadline', 'Application Due Date', 'Due Date']:
-                if deadline_field in job_dict:
-                    cleaned_job['Application Deadline'] = job_dict[deadline_field]
-                    break
-            
-            # Include all other existing fields
-            for key, value in job_dict.items():
-                if key not in cleaned_job:  # Don't overwrite the standardized field names
-                    cleaned_job[key] = value
-            
-            clean_matches.append(cleaned_job)
-            
-        logger.info(f"Found {len(clean_matches)} matches")
+        logger.info(f"Found {len(complete_jobs)} matches")
         
         return JSONResponse({
-            "matches": clean_matches,
-            "total_found": len(clean_matches),
+            "jobs": complete_jobs,
+            "total_found": len(complete_jobs),
             "search_query": user_query,
+            "message": f"Found {len(complete_jobs)} job(s) matching '{user_query}'. Click on any job to view details and apply.",
             "suggestions": [
-                "Analyze CV against a specific job (privacy protected)",
+                "Analyze your CV against a job (privacy protected)",
                 "Get CV feedback (privacy protected)",
                 "Take MomFit Assessment"
-            ] if clean_matches else [
+            ] if complete_jobs else [
                 "Try a broader search term",
                 "Search for 'remote work'",
                 "Look for 'part-time jobs'"
