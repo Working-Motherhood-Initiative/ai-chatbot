@@ -860,29 +860,50 @@ async def get_all_available_jobs(token: str = Depends(verify_token)):
 # Optional: Keep search functionality as a separate endpoint if needed later
 @app.post("/search-jobs")
 async def search_jobs(request: Request, token: str = Depends(verify_token)):
-    """Search for specific jobs (optional - if you want filtering later)"""
+    """Search for jobs with optional filters by country and job type"""
     try:
         data = await request.json()
         user_query = data.get("query", "")
+        country_filter = data.get("country", "").strip()
+        job_type_filter = data.get("job_type", "").strip()
         
+        logger.info(f"Search - Query: '{user_query}', Country: '{country_filter}', Type: '{job_type_filter}'")
+        
+        # Get all jobs if no query, otherwise search by query
         if not user_query.strip():
-            # If no query, redirect to get all jobs
-            return JSONResponse({
-                "message": "No search query provided. Use GET /jobs to see all available jobs.",
-                "redirect": "/jobs"
-            })
+            jobs = get_all_jobs()
+        else:
+            jobs = find_jobs_from_sentence(user_query)
         
-        logger.info(f"Received search query: {user_query}")
+        # Apply country filter
+        if country_filter:
+            jobs = [
+                job for job in jobs
+                if country_filter.lower() in job.get("Location", "").lower()
+            ]
         
-        matches = find_jobs_from_sentence(user_query)
+        # Apply job type filter (remote, on-site, hybrid)
+        if job_type_filter:
+            job_type_lower = job_type_filter.lower()
+            jobs = [
+                job for job in jobs
+                if job_type_lower in job.get("Job Type", "").lower()
+            ]
         
         # Format matching jobs
         complete_jobs = []
-        for idx, job in enumerate(matches):
+        for idx, job in enumerate(jobs):
             job_dict = dict(job)
             
             if 'embedding' in job_dict:
                 del job_dict['embedding']
+            
+            description = (
+                job_dict.get("Job Description (Brief Summary)") or 
+                job_dict.get("Job Description (Brief Summary)  ") or
+                job_dict.get("Job Description") or 
+                "N/A"
+            )
             
             complete_job = {
                 "job_id": idx,
@@ -890,7 +911,7 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
                 "job_type": job_dict.get("Job Type", "N/A"),
                 "industry": job_dict.get("Industry", "N/A"),
-                "job_description": job_dict.get("Job Description (Brief Summary)", job_dict.get("Job Description", "N/A")),
+                "job_description": description,
                 "location": job_dict.get("Location", "N/A"),
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
@@ -899,11 +920,30 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             
             complete_jobs.append(complete_job)
         
+        # Build response message
+        filters_applied = []
+        if user_query:
+            filters_applied.append(f"query '{user_query}'")
+        if country_filter:
+            filters_applied.append(f"country '{country_filter}'")
+        if job_type_filter:
+            filters_applied.append(f"type '{job_type_filter}'")
+        
+        filter_text = " and ".join(filters_applied) if filters_applied else "no filters"
+        
         return JSONResponse({
             "jobs": complete_jobs,
             "total_found": len(complete_jobs),
-            "search_query": user_query,
-            "message": f"Found {len(complete_jobs)} job(s) matching '{user_query}'."
+            "filters_applied": {
+                "query": user_query if user_query else None,
+                "country": country_filter if country_filter else None,
+                "job_type": job_type_filter if job_type_filter else None
+            },
+            "message": f"Found {len(complete_jobs)} job(s) matching {filter_text}.",
+            "available_filters": {
+                "countries": ["Ghana", "Nigeria", "Kenya", "Remote"],
+                "job_types": ["Remote", "On-site", "Hybrid", "Part-time", "Full-time"]
+            }
         })
         
     except Exception as e:
