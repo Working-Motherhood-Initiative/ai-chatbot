@@ -381,6 +381,26 @@ def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title:
         "strengths": strengths
     }
 
+def get_match_ranking(overall_score: int) -> Dict[str, str]:
+    if overall_score >= 80:
+        return {
+            "level": "High",
+            "color": "#059669",  # Green
+            "description": "Excellent match - strongly recommended to apply"
+        }
+    elif overall_score >= 50:
+        return {
+            "level": "Medium", 
+            "color": "#f59e0b",  # Amber
+            "description": "Good match - consider applying with CV improvements"
+        }
+    else:
+        return {
+            "level": "Low",
+            "color": "#ef4444",  # Red
+            "description": "Weak match - significant improvements needed"
+        }
+
 def calculate_keyword_match(cv_text: str, job_description: str) -> float:
     """Calculate percentage of important job keywords found in CV"""
     job_keywords = extract_important_keywords(job_description)
@@ -1042,9 +1062,14 @@ async def analyze_cv_job_match_hybrid_endpoint(
 
         ai_response = get_ai_response(messages, max_tokens=600)
 
+        # Get ranking based on match score
+        ranking = get_match_ranking(match_data['overall_match'])
+
         return JSONResponse({
             "response": ai_response,
             "match_score": match_data['overall_match'],
+            "ranking": ranking["level"],  
+            "ranking_details": ranking,   
             "breakdown": match_data['breakdown'],
             "strengths": match_data['strengths'],
             "missing_keywords": match_data['missing_keywords'],
