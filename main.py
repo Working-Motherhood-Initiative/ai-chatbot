@@ -20,8 +20,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from typing import List, Dict, Tuple, Set
 from collections import Counter
-
-# Add this import at the top of your main.py file, along with your other imports
+from pydantic import BaseModel
+from typing import Dict, Any
+from labour_law_rag import get_rag_instance, initialize_rag_system
 from assessment_questions import (
     ASSESSMENT_QUESTIONS,
     calculate_assessment_scores,
@@ -30,9 +31,12 @@ from assessment_questions import (
     validate_responses
 )
 
-# Add this Pydantic model with your other models (if you don't already have it)
-from pydantic import BaseModel
-from typing import Dict, Any
+
+class LabourLawQuery(BaseModel):
+    query: str
+    country: Optional[str] = None
+    user_context: Optional[str] = None
+    chat_history: Optional[List[Dict[str, str]]] = None
 
 class AssessmentResponse(BaseModel):
     career_readiness: Dict[str, str]
@@ -561,11 +565,20 @@ async def startup_event():
         preload_job_embeddings()
         jobs = get_all_jobs()
         logger.info(f"Successfully loaded {len(jobs)} jobs")
+        
+        # Initialize Labour Law RAG System
+        logger.info("Initializing Labour Law RAG system...")
+        try:
+            doc_count = initialize_rag_system(pdf_directory="labour_laws", force_reload=False)
+            logger.info(f"Successfully loaded {doc_count} labour law document chunks")
+        except Exception as e:
+            logger.error(f"Labour Law RAG initialization failed: {e}")
+            logger.warning("Labour law queries will not be available")
+            
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
 
-# API Endpoints
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -641,6 +654,16 @@ async def root():
                 <span class="method">GET</span> <code>/assessment-stats</code>
                 <p>Get assessment statistics and metadata</p>
             </div>
+
+            <div class="endpoint new-feature">
+                <span class="method">POST</span> <code>/labour-law-query</code>
+                <p>Ask questions about labour laws across 16 African countries (RAG-powered)</p>
+            </div>
+            
+            <div class="endpoint">
+                <span class="method">GET</span> <code>/labour-law-countries</code>
+                <p>Get list of supported countries for labour law queries</p>
+            </div>
             
             <div class="endpoint">
                 <span class="method">GET</span> <code>/health</code>
@@ -690,6 +713,7 @@ async def root():
     """
     return HTMLResponse(content=html_content, status_code=200)
 
+
 @app.post("/welcome")
 async def welcome_user(request: Request, token: str = Depends(verify_token)):
     """Welcome and onboard new users"""
@@ -726,81 +750,121 @@ async def welcome_user(request: Request, token: str = Depends(verify_token)):
         ]
     })
 
-@app.post("/cv-tips")
-async def get_cv_tips(file: UploadFile = File(...), token: str = Depends(verify_token)):
-    """Get CV improvement tips with privacy protection and monitoring"""
+@app.post("/labour-law-query")
+async def labour_law_query(
+    request_data: LabourLawQuery,
+    token: str = Depends(verify_token)
+):
+    """
+    Answer labour law questions using RAG with conversational memory.
+
+    Supports queries about:
+    - Maternity leave rights
+    - Workplace discrimination
+    - Flexible work arrangements
+    - Career protection for mothers
+    - Employment rights
+    - And more across 16 African countries
+    """
     try:
-        # Validate file size
-        validate_file_size(file)
-        
-        # Extract text from file
-        if file.filename.endswith(".pdf"):
-            original_content = extract_text_from_pdf(file.file)
-        elif file.filename.endswith(".docx"):
-            original_content = extract_text_from_docx(file.file)
-        else:
+        rag = get_rag_instance()
+
+        # Check if system is initialized
+        if not rag.documents_loaded:
             return JSONResponse(
-                status_code=400,
-                content={"error": "Unsupported file type. Please upload PDF or DOCX files."}
+                status_code=503,
+                content={
+                    "error": "Labour law system is not initialized",
+                    "message": "Please try again in a moment or contact support"
+                }
             )
 
-        if not original_content.strip():
+        # Validate query
+        if not request_data.query or len(request_data.query.strip()) < 5:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Could not extract text from the uploaded file."}
+                content={"error": "Please provide a valid question (minimum 5 characters)"}
             )
 
-        # PRIVACY PROTECTION: Remove personal information
-        cleaned_content = remove_personal_info_from_cv(original_content)
-        
-        # MONITORING: Log and validate privacy protection
-        privacy_validation = log_privacy_protection(original_content, cleaned_content, "cv-tips")
-        
-        # Alert if privacy protection failed
-        if not privacy_validation["privacy_check_passed"]:
-            logger.error(f"PRIVACY BREACH DETECTED: {privacy_validation['issues_found']}")
-        
-        messages = [
-            {
-                "role": "system", 
-                "content": "You are a professional career coach helping mothers improve their CVs. The CV has been privacy-protected (personal details removed). Provide specific, actionable advice focusing on how to highlight transferable skills, handle career gaps, and present experience in a compelling way for mothers returning to work or changing careers."
-            },
-            {
-                "role": "user", 
-                "content": f"Here's a privacy-protected resume for analysis:\n{cleaned_content}\n\nHow can this CV be improved? Focus on professional content, skills presentation, and structure."
-            }
-        ]
+        # Validate country if provided
+        if request_data.country:
+            supported_countries = rag.get_supported_countries()
+            if request_data.country not in supported_countries:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": f"Country '{request_data.country}' not supported",
+                        "supported_countries": supported_countries
+                    }
+                )
 
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=600
+        logger.info(f"Labour law query: '{request_data.query}' for country: {request_data.country or 'All'}")
+
+        # Generate answer using RAG with chat history
+        result = rag.generate_answer(
+            query=request_data.query,
+            country=request_data.country,
+            user_context=request_data.user_context or "working mother seeking labour rights information",
+            chat_history=request_data.chat_history or []  # <-- Pass chat history
         )
 
+        # Return response with updated chat history
         return JSONResponse({
-            "response": response.choices[0].message.content.strip(),
-            "privacy_protection": {
-                "enabled": True,
-                "status": "Protected" if privacy_validation["privacy_check_passed"] else "Warning",
-                "reduction_percentage": privacy_validation["statistics"]["reduction_percentage"],
-                "details_removed": {
-                    "emails": privacy_validation["statistics"]["emails_removed"],
-                    "phones": privacy_validation["statistics"]["phones_removed"]
-                }
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "chat_history": result.get("chat_history", []),  # <-- Return updated history
+            "metadata": {
+                "country": result.get("country"),
+                "confidence": result.get("confidence"),
+                "query": request_data.query,
+                "timestamp": datetime.now().isoformat()
             },
             "next_steps": [
-                "Take MomFit Assessment",
-                "Search for relevant jobs",
-                "Analyze CV against specific job posting"
-            ]
+                "Ask another labour law question",
+                "Search for jobs in your country",
+                "Get CV feedback (privacy protected)",
+                "Take MomFit Assessment"
+            ],
+            "disclaimer": "This information is for educational purposes. For specific legal advice, please consult a qualified employment lawyer in your country."
         })
-    
+
     except Exception as e:
-        logger.error(f"CV tips error: {e}")
+        logger.error(f"Labour law query error: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": "Failed to analyze CV. Please try again."}
+            content={
+                "error": "Failed to process labour law query",
+                "message": "Please try again or rephrase your question"
+            }
+        )
+
+
+@app.get("/labour-law-countries")
+async def get_labour_law_countries(token: str = Depends(verify_token)):
+    """Get list of supported countries for labour law queries"""
+    try:
+        rag = get_rag_instance()
+        countries = rag.get_supported_countries()
+        stats = rag.get_system_stats()
+        
+        return JSONResponse({
+            "supported_countries": countries,
+            "total_countries": len(countries),
+            "system_stats": stats,
+            "example_queries": [
+                "What are my maternity leave rights?",
+                "Can I request flexible work hours?",
+                "What protection do I have against pregnancy discrimination?",
+                "What are my rights if I'm breastfeeding at work?",
+                "Can I be fired while on maternity leave?"
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting labour law countries: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve country information"}
         )
 
 
@@ -1211,7 +1275,7 @@ async def get_assessment_stats(token: str = Depends(verify_token)):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with privacy protection status"""
+    """Health check endpoint with privacy protection and labour law status"""
     try:
         # Test OpenAI connection
         test_response = openai_client.chat.completions.create(
@@ -1238,6 +1302,14 @@ async def health_check():
     except Exception:
         privacy_status = "Error"
     
+    # Test labour law RAG
+    try:
+        rag = get_rag_instance()
+        stats = rag.get_system_stats()
+        labour_law_status = f"Active - {stats['total_chunks']} chunks loaded" if stats['documents_loaded'] else "Not initialized"
+    except Exception:
+        labour_law_status = "Error"
+    
     return JSONResponse({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -1246,7 +1318,8 @@ async def health_check():
             "openai": openai_status,
             "job_data": job_data_status,
             "assessment": "Available",
-            "privacy_protection": privacy_status
+            "privacy_protection": privacy_status,
+            "labour_law_rag": labour_law_status
         },
         "version": "1.0.0",
         "file_limits": {
