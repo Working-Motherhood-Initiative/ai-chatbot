@@ -10,3 +10,8 @@ pdfminer.six
 pandas
 numpy
 scikit-learn
+langchain
+langchain-community
+faiss-cpu
+pypdf
+sentence-transformers
