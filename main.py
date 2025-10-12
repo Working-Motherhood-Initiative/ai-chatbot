@@ -566,11 +566,26 @@ async def startup_event():
         jobs = get_all_jobs()
         logger.info(f"Successfully loaded {len(jobs)} jobs")
         
-        # Initialize Labour Law RAG System
+        # Initialize Labour Law RAG System from Google Drive
         logger.info("Initializing Labour Law RAG system...")
         try:
-            doc_count = initialize_rag_system(pdf_directory="labour_laws", force_reload=False)
+            # The system will automatically:
+            # 1. Try Google Drive first (fastest)
+            # 2. Fall back to local cache
+            # 3. Fall back to loading from PDFs if needed
+            doc_count = initialize_rag_system(
+                pdf_directory="labour_laws",
+                force_reload=False,
+                use_gdrive=True  # Enable Google Drive loading
+            )
             logger.info(f"Successfully loaded {doc_count} labour law document chunks")
+            
+            # Log loading method
+            rag = get_rag_instance()
+            stats = rag.get_system_stats()
+            logger.info(f"Google Drive enabled: {stats.get('gdrive_enabled', False)}")
+            logger.info(f"Local cache exists: {stats.get('local_cache_exists', False)}")
+            
         except Exception as e:
             logger.error(f"Labour Law RAG initialization failed: {e}")
             logger.warning("Labour law queries will not be available")
@@ -578,24 +593,66 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
+    
 
+@app.post("/admin/reload-vectorstore")
+async def admin_reload_vectorstore(token: str = Depends(verify_token)):
+    """
+    Manually reload vectorstore from Google Drive (admin endpoint)
+    Useful when you update the PKL file in Google Drive
+    """
+    try:
+        logger.info("Admin: Manual vectorstore reload initiated...")
+        
+        rag = get_rag_instance()
+        doc_count = rag.reload_from_gdrive()
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Vector store reloaded successfully from Google Drive",
+            "document_chunks": doc_count,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin reload failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to reload vector store", 
+                "details": str(e)
+            }
+        )
+        
+            
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    html_content = """
+    # Get Google Drive status
+    try:
+        rag = get_rag_instance()
+        stats = rag.get_system_stats()
+        gdrive_status = "Enabled" if stats.get('gdrive_enabled') else "Disabled"
+        gdrive_class = "enabled" if stats.get('gdrive_enabled') else "disabled"
+    except:
+        gdrive_status = "Unknown"
+        gdrive_class = "disabled"
+    
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>Motherboard Career Assistant API</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
-            .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #667eea; }
-            .endpoint { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #667eea; }
-            .method { color: #28a745; font-weight: bold; }
-            .new-feature { background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%); border-left: 4px solid #764ba2; }
-            .privacy-feature { background: linear-gradient(135deg, #fff0f0 0%, #ffe8e8 100%); border-left: 4px solid #dc3545; }
-            code { background: #e9ecef; padding: 2px 6px; border-radius: 3px; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            h1 {{ color: #667eea; }}
+            .endpoint {{ background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #667eea; }}
+            .method {{ color: #28a745; font-weight: bold; }}
+            .new-feature {{ background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%); border-left: 4px solid #764ba2; }}
+            .privacy-feature {{ background: linear-gradient(135deg, #fff0f0 0%, #ffe8e8 100%); border-left: 4px solid #dc3545; }}
+            .status-enabled {{ color: #28a745; font-weight: bold; }}
+            .status-disabled {{ color: #6c757d; }}
         </style>
     </head>
     <body>
@@ -606,6 +663,7 @@ async def root():
             <h2>API Status</h2>
             <p>Status: <span style="color: green;">Running with Privacy Protection</span></p>
             <p>Version: 1.0.0</p>
+            <p>Google Drive Integration: <span class="status-{gdrive_class}">{gdrive_status}</span></p>
             
             <div class="privacy-feature">
                 <h3>Privacy Protection Active</h3>
@@ -615,6 +673,17 @@ async def root():
                     <li>Names, emails, phone numbers, addresses protected</li>
                     <li>Professional content preserved for quality analysis</li>
                     <li>Real-time privacy monitoring and validation</li>
+                </ul>
+            </div>
+            
+            <div class="new-feature">
+                <h3>Google Drive Integration</h3>
+                <p>Labour law vectorstore now loads from Google Drive for faster startup:</p>
+                <ul>
+                    <li> Ultra-fast initialization (seconds vs minutes)</li>
+                    <li> No need for local PDF processing</li>
+                    <li> Easy updates - just replace file in Google Drive</li>
+                    <li> Automatic local caching for offline resilience</li>
                 </ul>
             </div>
             
@@ -657,7 +726,7 @@ async def root():
 
             <div class="endpoint new-feature">
                 <span class="method">POST</span> <code>/labour-law-query</code>
-                <p>Ask questions about labour laws across 16 African countries (RAG-powered)</p>
+                <p>Ask questions about labour laws across 16 African countries (RAG-powered, Google Drive enabled)</p>
             </div>
             
             <div class="endpoint">
@@ -665,9 +734,14 @@ async def root():
                 <p>Get list of supported countries for labour law queries</p>
             </div>
             
+            <div class="endpoint new-feature">
+                <span class="method">POST</span> <code>/admin/reload-vectorstore</code>
+                <p>Manually reload vectorstore from Google Drive (Admin only)</p>
+            </div>
+            
             <div class="endpoint">
                 <span class="method">GET</span> <code>/health</code>
-                <p>Health check endpoint with privacy status</p>
+                <p>Health check endpoint with privacy status and Google Drive info</p>
             </div>
             
             <div class="endpoint">
@@ -678,32 +752,6 @@ async def root():
             <h2>Authentication</h2>
             <p>Most endpoints require authentication. Include your API token in the Authorization header:</p>
             <code>Authorization: Bearer YOUR_API_TOKEN</code>
-            
-            <h2>Privacy Protection Features</h2>
-            <p>Our privacy protection system ensures your personal information is never sent to external AI services:</p>
-            <ul>
-                <li><strong>Automatic Detection:</strong> Identifies emails, phone numbers, addresses, names</li>
-                <li><strong>Smart Removal:</strong> Removes personal info while preserving professional content</li>
-                <li><strong>Real-time Monitoring:</strong> Validates privacy protection with scoring system</li>
-                <li><strong>Transparency:</strong> Shows what was protected in API responses</li>
-                <li><strong>Professional Quality:</strong> Maintains high-quality career analysis</li>
-            </ul>
-            
-            <h2>New Feature: MomFit Mini Assessment</h2>
-            <p>Our assessment helps working mothers understand their career readiness and work-life balance:</p>
-            <ul>
-                <li>20 Questions: 10 career readiness + 10 work-life balance</li>
-                <li>5-7 Minutes: Quick but comprehensive evaluation</li>
-                <li>Personalized Feedback: Tailored recommendations based on responses</li>
-                <li>Scoring: 0-100 scale with detailed breakdowns</li>
-            </ul>
-            
-            <h2>Africa Focus</h2>
-            <p>Specialized support for working mothers in Ghana, Nigeria, and Kenya.</p>
-            
-            <h2>File Upload Limits</h2>
-            <p>Maximum file size: 5MB for CV uploads</p>
-            <p>Supported formats: PDF, DOCX</p>
             
             <h2>Documentation</h2>
             <p>Visit <a href="/docs">/docs</a> for interactive API documentation</p>
@@ -1302,13 +1350,24 @@ async def health_check():
     except Exception:
         privacy_status = "Error"
     
-    # Test labour law RAG
+    # Test labour law RAG with Google Drive info
     try:
         rag = get_rag_instance()
         stats = rag.get_system_stats()
-        labour_law_status = f"Active - {stats['total_chunks']} chunks loaded" if stats['documents_loaded'] else "Not initialized"
+        
+        if stats['documents_loaded']:
+            labour_law_status = f"Active - {stats['total_chunks']} chunks"
+            gdrive_info = {
+                "enabled": stats.get('gdrive_enabled', False),
+                "local_cache": stats.get('local_cache_exists', False)
+            }
+        else:
+            labour_law_status = "Not initialized"
+            gdrive_info = {"enabled": False, "local_cache": False}
+            
     except Exception:
         labour_law_status = "Error"
+        gdrive_info = {"enabled": False, "local_cache": False}
     
     return JSONResponse({
         "status": "healthy",
@@ -1321,13 +1380,15 @@ async def health_check():
             "privacy_protection": privacy_status,
             "labour_law_rag": labour_law_status
         },
+        "google_drive": gdrive_info,
         "version": "1.0.0",
         "file_limits": {
             "max_size": "5MB",
             "supported_formats": ["PDF", "DOCX"]
         }
     })
-
+    
+    
 @app.get("/api-info")
 async def get_api_info():
     """Get API information and capabilities"""
