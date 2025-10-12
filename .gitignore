@@ -5,6 +5,11 @@ gcreds.json
 !package.json
 !render.yaml
 
+# Exclude large vectorstore files
+vectorstore/
+*.pkl
+labour_laws/
+
 # Python
 __pycache__/
 *.py[cod]
