@@ -25,3 +25,5 @@ venv/
 # Local development
 .DS_Store
 
+vectorstore/
+*.pkl
