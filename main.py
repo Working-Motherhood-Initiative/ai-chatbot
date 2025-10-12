@@ -30,7 +30,8 @@ from assessment_questions import (
     get_assessment_instructions,
     validate_responses
 )
-
+import asyncio
+import threading
 
 class LabourLawQuery(BaseModel):
     query: str
@@ -94,6 +95,8 @@ except Exception as e:
     logger.error(f"Failed to initialize OpenAI client: {e}")
     raise
 
+_initialization_complete = False
+_initialization_error = None
 # PRIVACY PROTECTION FUNCTIONS
 
 def remove_personal_info_from_cv(cv_text: str) -> str:
@@ -549,17 +552,12 @@ def validate_file_size(file: UploadFile):
     if hasattr(file, 'size') and file.size and file.size > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File too large. Maximum size is 5MB.")
 
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Initialize data and connections on startup"""
+def initialize_background():
+    """Run initialization in background thread"""
+    global _initialization_complete, _initialization_error
+    
     try:
-        # Test privacy protection on startup
-        test_text = "John Doe john@email.com (555) 123-4567 Professional Summary: Software developer"
-        cleaned = remove_personal_info_from_cv(test_text)
-        if "john@email.com" in cleaned:
-            raise Exception("Privacy protection system failed startup test")
-        logger.info("Privacy protection startup test passed")
+        logger.info("Background initialization started...")
         
         logger.info("Starting job data initialization...")
         preload_job_embeddings()
@@ -569,18 +567,13 @@ async def startup_event():
         # Initialize Labour Law RAG System from Google Drive
         logger.info("Initializing Labour Law RAG system...")
         try:
-            # The system will automatically:
-            # 1. Try Google Drive first (fastest)
-            # 2. Fall back to local cache
-            # 3. Fall back to loading from PDFs if needed
             doc_count = initialize_rag_system(
                 pdf_directory="labour_laws",
                 force_reload=False,
-                use_gdrive=True  # Enable Google Drive loading
+                use_gdrive=True
             )
             logger.info(f"Successfully loaded {doc_count} labour law document chunks")
             
-            # Log loading method
             rag = get_rag_instance()
             stats = rag.get_system_stats()
             logger.info(f"Google Drive enabled: {stats.get('gdrive_enabled', False)}")
@@ -588,12 +581,48 @@ async def startup_event():
             
         except Exception as e:
             logger.error(f"Labour Law RAG initialization failed: {e}")
-            logger.warning("Labour law queries will not be available")
-            
+            logger.warning("Labour law queries will not be available until next restart")
+            _initialization_error = str(e)
+        
+        _initialization_complete = True
+        logger.info("Background initialization completed!")
+        
+    except Exception as e:
+        logger.error(f"Background initialization error: {e}")
+        _initialization_error = str(e)
+        _initialization_complete = True
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize data in background - don't block port opening"""
+    try:
+        # Test privacy protection on startup (quick)
+        test_text = "John Doe john@email.com (555) 123-4567 Professional Summary: Software developer"
+        cleaned = remove_personal_info_from_cv(test_text)
+        if "john@email.com" in cleaned:
+            raise Exception("Privacy protection system failed startup test")
+        logger.info("Privacy protection startup test passed")
+        
+        logger.info("API server starting...")
+        logger.info("Running heavy initialization in background thread...")
+        
+        # Start initialization in background thread - don't block
+        init_thread = threading.Thread(target=initialize_background, daemon=True)
+        init_thread.start()
+        
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
-    
+
+# Add a health check endpoint that reports initialization status
+@app.get("/init-status")
+async def initialization_status():
+    """Check initialization status"""
+    return JSONResponse({
+        "initialization_complete": _initialization_complete,
+        "error": _initialization_error,
+        "timestamp": datetime.now().isoformat()
+    })   
 
 @app.post("/admin/reload-vectorstore")
 async def admin_reload_vectorstore(token: str = Depends(verify_token)):
