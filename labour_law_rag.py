@@ -3,7 +3,6 @@ import logging
 from typing import List, Dict, Optional
 from pathlib import Path
 import pickle
-
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
@@ -13,17 +12,8 @@ import openai
 
 logger = logging.getLogger(__name__)
 
-class LabourLawRAG:
-    """RAG system for labour law queries"""
-    
+class LabourLawRAG:    
     def __init__(self, pdf_directory: str = "labour_laws", openai_api_key: str = None):
-        """
-        Initialize the RAG system
-        
-        Args:
-            pdf_directory: Directory containing labour law PDFs
-            openai_api_key: OpenAI API key for generation
-        """
         self.pdf_directory = pdf_directory
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.vectorstore = None
@@ -51,15 +41,6 @@ class LabourLawRAG:
             logger.warning("OpenAI API key not found")
     
     def load_and_process_documents(self, force_reload: bool = False) -> int:
-        """
-        Load and process all labour law PDFs
-        
-        Args:
-            force_reload: Force reload even if vectorstore exists
-            
-        Returns:
-            Number of documents loaded
-        """
         vectorstore_path = "vectorstore/labour_laws.pkl"
         
         # Check if vectorstore already exists
@@ -161,17 +142,6 @@ class LabourLawRAG:
         country: Optional[str] = None,
         top_k: int = 4
     ) -> List[Document]:
-        """
-        Search for relevant documents based on query
-        
-        Args:
-            query: User's question
-            country: Optional country filter
-            top_k: Number of documents to retrieve
-            
-        Returns:
-            List of relevant documents
-        """
         if not self.documents_loaded or not self.vectorstore:
             raise ValueError("Documents not loaded. Call load_and_process_documents() first.")
         
