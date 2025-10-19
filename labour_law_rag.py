@@ -12,6 +12,7 @@ import openai
 import gdown
 import requests
 from dotenv import load_dotenv
+import re
 
 load_dotenv()
 
@@ -382,6 +383,26 @@ Please provide a clear, accurate answer based ONLY on the information above. Str
 3. Practical advice for working mothers
 4. Any country-specific differences if applicable
 
+IMPORTANT FORMATTING: Structure your response with clear spacing and line breaks:
+
+1. Direct answer to the question
+   - Use bullet points for multiple items
+   - Add a blank line after this section
+
+2. Relevant legal provisions or rights
+   - List specific legal references
+   - Add a blank line after this section
+
+3. Practical advice for working mothers
+   - Provide actionable steps
+   - Add a blank line after this section
+
+4. Any country-specific differences if applicable
+   - Note variations between countries
+   - Add a blank line after this section
+
+Use double line breaks between each numbered section for better readability.
+
 If the context doesn't contain the answer, say so clearly."""
         
         messages.append({"role": "user", "content": user_prompt})
@@ -395,6 +416,8 @@ If the context doesn't contain the answer, say so clearly."""
             )
 
             answer = response.choices[0].message.content.strip()
+            answer = self._clean_answer_formatting(answer)
+
 
             # Extract sources
             sources = []
@@ -433,18 +456,16 @@ If the context doesn't contain the answer, say so clearly."""
                 "error": str(e),
                 "chat_history": chat_history or []
             }
+            
+    def _clean_answer_formatting(self, answer: str) -> str:
+        answer = answer.replace('\\n', '\n')
+        answer = re.sub(r'(\n)(\d+\.)', r'\n\n\2', answer)
+        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        return answer.strip()        
     
     def reload_from_gdrive(self) -> int:
-        """
-        Force reload vectorstore from Google Drive
-        Useful for manual updates
-        
-        Returns:
-            int: Number of document chunks loaded
-        """
         logger.info("Force reloading vectorstore from Google Drive...")
         
-        # Remove local cache
         if os.path.exists(self.local_vectorstore_path):
             os.remove(self.local_vectorstore_path)
             logger.info("Removed cached vectorstore file")
