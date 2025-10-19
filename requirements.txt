@@ -12,9 +12,10 @@ numpy
 scikit-learn
 langchain
 langchain-community
+langchain-text-splitters
 faiss-cpu
 pypdf
 sentence-transformers
 gdown>=4.7.1
-requests>=2.31.0                # ← Make sure this is included
+requests>=2.31.0                
 
