@@ -37,32 +37,24 @@ class LabourLawRAG:
             "Uganda", "Zambia", "Zimbabwe", "Botswana"
         ]
         
-        # Initialize embeddings model (runs locally, no API needed)
         logger.info("Initializing embeddings model...")
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             model_kwargs={'device': 'cpu'}
         )
         
-        # Initialize OpenAI client
         if self.openai_api_key:
             self.openai_client = openai.OpenAI(api_key=self.openai_api_key)
         else:
             logger.warning("OpenAI API key not found")
     
     def download_vectorstore_from_gdrive(self) -> bool:
-        """
-        Download vectorstore PKL file from Google Drive
-        
-        Returns:
-            bool: True if successful, False otherwise
-        """
         try:
             if not self.gdrive_file_id:
                 logger.warning("GDRIVE_FILE_ID not set - skipping Google Drive download")
                 return False
             
-            # Check if file already exists locally
+            #Check if file already exists locally
             if os.path.exists(self.local_vectorstore_path):
                 logger.info(f"Vectorstore file already exists at {self.local_vectorstore_path}")
                 return True
@@ -131,15 +123,6 @@ class LabourLawRAG:
             return False
     
     def load_vectorstore_from_file(self, file_path: str) -> bool:
-        """
-        Load vectorstore from PKL file
-        
-        Args:
-            file_path: Path to the PKL file
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
         try:
             logger.info(f"Loading vectorstore from {file_path}...")
             
@@ -161,17 +144,6 @@ class LabourLawRAG:
             return False
     
     def load_and_process_documents(self, force_reload: bool = False, use_gdrive: bool = True) -> int:
-        """
-        Load vectorstore either from Google Drive or local PDFs
-        
-        Args:
-            force_reload: Force reload from PDFs (ignores existing vectorstore)
-            use_gdrive: Try to load from Google Drive first
-            
-        Returns:
-            int: Number of document chunks loaded
-        """
-        
         # PRIORITY 1: Try loading from Google Drive (fastest)
         if use_gdrive and not force_reload:
             logger.info("Attempting to load vectorstore from Google Drive...")
@@ -204,12 +176,6 @@ class LabourLawRAG:
         return self._load_from_pdfs()
     
     def _load_from_pdfs(self) -> int:
-        """
-        Load and process documents from PDF files (original method)
-        
-        Returns:
-            int: Number of document chunks created
-        """
         logger.info(f"Loading labour law PDFs from {self.pdf_directory}...")
         
         if not os.path.exists(self.pdf_directory):
@@ -283,7 +249,6 @@ class LabourLawRAG:
         return len(splits)
     
     def _extract_country_from_filename(self, filename: str) -> str:
-        """Extract country name from PDF filename"""
         filename_lower = filename.lower()
         
         for country in self.supported_countries:
@@ -457,11 +422,153 @@ If the context doesn't contain the answer, say so clearly."""
                 "chat_history": chat_history or []
             }
             
+    def generate_answer(self, query: str, country: Optional[str] = None,user_context: Optional[str] = None,chat_history: Optional[List[Dict[str, str]]] = None) -> Dict:
+        if not self.documents_loaded:
+            raise ValueError("Documents not loaded. Call load_and_process_documents() first.")
+        
+        logger.info(f"Searching for: {query}" + (f" in {country}" if country else ""))
+        relevant_docs = self.search_relevant_documents(query, country)
+
+        if not relevant_docs:
+            return {
+                "answer": "I couldn't find specific information about that in the labour law documents. Could you rephrase your question or specify a country?",
+                "sources": [],
+                "country": country,
+                "confidence": "low",
+                "chat_history": chat_history or []
+            }
+
+        # Prepare RAG context
+        context = "\n\n".join([
+            f"[Source: {doc.metadata.get('country', 'Unknown')} - {doc.metadata.get('source', 'Unknown')}]\n{doc.page_content}"
+            for doc in relevant_docs
+        ])
+
+        system_prompt = """You are a helpful labour law assistant specializing in African countries.
+    You provide accurate, clear, and supportive answers to working mothers about their labour rights.
+
+    Guidelines:
+    - Base your answer ONLY on the provided context from official labour law documents
+    - Be clear, supportive, and practical in your advice
+    - If information is specific to certain countries, state this clearly
+    - If the context doesn't contain enough information, say so honestly
+    - Focus on rights related to maternity leave, workplace discrimination, flexible work, and career protection
+    - Use simple, accessible language
+    """
+
+        # Construct messages for OpenAI chat API
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Limit history to last 8 turns
+        if chat_history:
+            truncated = chat_history[-8:]
+            messages.extend(truncated)
+
+        # Add the current question with context and IMPROVED formatting instructions
+        user_prompt = f"""Question: {query}
+
+    {f"User Context: {user_context}" if user_context else ""}
+
+    Labour Law Context:
+    {context}
+
+    Please provide a clear, accurate answer based ONLY on the information above.
+
+    FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+
+    **Direct Answer:**
+    [Provide a clear 2-3 sentence answer to the question]
+
+    **Legal Provisions:**
+    [List the specific legal rights or provisions, one per line with bullet points]
+    • Right 1
+    • Right 2
+    • Right 3
+
+    **Practical Advice:**
+    [Provide actionable steps the person can take]
+    • Action 1
+    • Action 2
+    • Action 3
+
+    **Country-Specific Notes:**
+    [If applicable, note any variations between countries]
+
+    CRITICAL FORMATTING RULES:
+    1. Use double line breaks (\\n\\n) between each major section
+    2. Use bullet points (•) for lists, with one item per line
+    3. Keep paragraphs concise (2-4 sentences maximum)
+    4. Add a blank line after section headers
+    5. Use clear section headers with ** markdown bold **
+
+    If the context doesn't contain the answer, say so clearly and suggest what additional information would help."""
+        
+        messages.append({"role": "user", "content": user_prompt})
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                temperature=0.3,
+                max_tokens=800
+            )
+
+            answer = response.choices[0].message.content.strip()
+            
+            # Apply enhanced formatting cleanup
+            answer = self._clean_answer_formatting(answer)
+
+            # Extract sources
+            sources = []
+            seen_sources = set()
+            for doc in relevant_docs:
+                source_key = f"{doc.metadata.get('country', 'Unknown')}_{doc.metadata.get('source', 'Unknown')}"
+                if source_key not in seen_sources:
+                    sources.append({
+                        "country": doc.metadata.get('country', 'Unknown'),
+                        "document": doc.metadata.get('source', 'Unknown'),
+                        "excerpt": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
+                    })
+                    seen_sources.add(source_key)
+
+            # Update chat history
+            updated_history = (chat_history or [])[-8:]
+            updated_history.append({"role": "user", "content": query})
+            updated_history.append({"role": "assistant", "content": answer})
+
+            return {
+                "answer": answer,
+                "sources": sources,
+                "country": country if country else "Multiple countries",
+                "confidence": "high" if len(relevant_docs) >= 3 else "medium",
+                "query": query,
+                "chat_history": updated_history
+            }
+
+        except Exception as e:
+            logger.error(f"Error generating answer: {e}")
+            return {
+                "answer": "I encountered an error processing your question. Please try rephrasing it.",
+                "sources": [],
+                "country": country,
+                "confidence": "error",
+                "error": str(e),
+                "chat_history": chat_history or []
+            }
+
+
     def _clean_answer_formatting(self, answer: str) -> str:
         answer = answer.replace('\\n', '\n')
         answer = re.sub(r'(\n)(\d+\.)', r'\n\n\2', answer)
+        answer = re.sub(r'([^\n])(\n)([-•*])', r'\1\n\n\3', answer)
+        answer = re.sub(r'(\.)(\s*)([A-Z])', lambda m: f'{m.group(1)}\n\n{m.group(3)}' if len(m.group(2)) > 1 else f'{m.group(1)} {m.group(3)}', answer)
+        answer = re.sub(r'(\n)([A-Z][^:\n]+:)', r'\n\n\2', answer)
         answer = re.sub(r'\n{3,}', '\n\n', answer)
-        return answer.strip()        
+        answer = re.sub(r'[ \t]+\n', '\n', answer)
+        answer = re.sub(r'\n[ \t]+', '\n', answer)
+        answer = re.sub(r'([-•*])([^\s])', r'\1 \2', answer)
+        
+        return answer.strip()
     
     def reload_from_gdrive(self) -> int:
         logger.info("Force reloading vectorstore from Google Drive...")
@@ -486,7 +593,6 @@ If the context doesn't contain the answer, say so clearly."""
         return len(self.vectorstore.docstore._dict)
     
     def get_supported_countries(self) -> List[str]:
-        """Get list of supported countries"""
         return self.supported_countries
     
     def get_system_stats(self) -> Dict:
@@ -512,27 +618,11 @@ If the context doesn't contain the answer, say so clearly."""
 _rag_instance = None
 
 def get_rag_instance() -> LabourLawRAG:
-    """Get or create global RAG instance"""
     global _rag_instance
     if _rag_instance is None:
         _rag_instance = LabourLawRAG()
     return _rag_instance
 
-def initialize_rag_system(
-    pdf_directory: str = "labour_laws", 
-    force_reload: bool = False,
-    use_gdrive: bool = True
-) -> int:
-    """
-    Initialize the RAG system
-    
-    Args:
-        pdf_directory: Path to PDF directory (fallback)
-        force_reload: Force reload from PDFs
-        use_gdrive: Try to load from Google Drive first
-        
-    Returns:
-        int: Number of document chunks loaded
-    """
+def initialize_rag_system(pdf_directory: str = "labour_laws", force_reload: bool = False,use_gdrive: bool = True) -> int:
     rag = get_rag_instance()
     return rag.load_and_process_documents(force_reload=force_reload, use_gdrive=use_gdrive)
