@@ -25,11 +25,8 @@ class LabourLawRAG:
         self.vectorstore = None
         self.embeddings = None
         self.documents_loaded = False
-        
-        # Google Drive configuration
         self.gdrive_file_id = os.getenv("GDRIVE_FILE_ID")
         self.local_vectorstore_path = "vectorstore/labour_laws.pkl"
-        
         self.supported_countries = [
             "Cambodia", "Cameroon", "Congo", "Ethiopia", "Gambia", 
             "Ghana", "Kenya", "Lesotho", "Liberia", "Malawi",
@@ -78,25 +75,21 @@ class LabourLawRAG:
             except Exception as e:
                 logger.warning(f"gdown fuzzy mode failed: {e}")
             
-            # Method 2: Try direct download URL
             if not success:
                 try:
                     logger.info("Attempting direct download...")
                     
-                    # Use the direct download link format
                     download_url = f"https://drive.google.com/uc?export=download&id={self.gdrive_file_id}"
                     
                     session = requests.Session()
                     response = session.get(download_url, stream=True)
                     
-                    # Handle Google Drive virus scan warning
                     for key, value in response.cookies.items():
                         if key.startswith('download_warning'):
                             params = {'id': self.gdrive_file_id, 'confirm': value}
                             response = session.get(download_url, params=params, stream=True)
                             break
                     
-                    # Save file
                     with open(self.local_vectorstore_path, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             if chunk:
@@ -108,7 +101,6 @@ class LabourLawRAG:
                 except Exception as e:
                     logger.warning(f"Direct download failed: {e}")
             
-            # Verify file exists and is readable
             if success and os.path.exists(self.local_vectorstore_path):
                 file_size = os.path.getsize(self.local_vectorstore_path) / (1024 * 1024)
                 logger.info(f"Successfully downloaded vectorstore ({file_size:.2f} MB)")
@@ -143,7 +135,6 @@ class LabourLawRAG:
             return False
     
     def load_and_process_documents(self, force_reload: bool = False, use_gdrive: bool = True) -> int:
-        # PRIORITY 1: Try loading from Google Drive (fastest)
         if use_gdrive and not force_reload:
             logger.info("Attempting to load vectorstore from Google Drive...")
             
@@ -160,7 +151,6 @@ class LabourLawRAG:
                 else:
                     logger.warning("Downloaded file but failed to load - will try other methods")
         
-        # PRIORITY 2: Try loading from existing local file
         if os.path.exists(self.local_vectorstore_path) and not force_reload:
             logger.info("Attempting to load existing local vectorstore...")
             
@@ -170,7 +160,6 @@ class LabourLawRAG:
                 logger.info("Successfully loaded existing local vectorstore")
                 return len(self.vectorstore.docstore._dict)
         
-        # PRIORITY 3: Load from PDFs (slowest, fallback option)
         logger.info("Loading vectorstore from PDFs (this may take a while)...")
         return self._load_from_pdfs()
     
@@ -197,11 +186,9 @@ class LabourLawRAG:
                 # Extract country name from filename
                 country = self._extract_country_from_filename(pdf_path.name)
                 
-                # Load PDF
                 loader = PyPDFLoader(str(pdf_path))
                 documents = loader.load()
                 
-                # Add metadata
                 for doc in documents:
                     doc.metadata['source'] = pdf_path.name
                     doc.metadata['country'] = country
@@ -218,7 +205,6 @@ class LabourLawRAG:
         
         logger.info(f"Total documents loaded: {len(all_documents)}")
         
-        # Split documents into chunks
         logger.info("Splitting documents into chunks...")
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
@@ -230,12 +216,10 @@ class LabourLawRAG:
         splits = text_splitter.split_documents(all_documents)
         logger.info(f"Created {len(splits)} text chunks")
         
-        # Create vectorstore
         logger.info("Creating vectorstore with embeddings...")
         self.vectorstore = FAISS.from_documents(splits, self.embeddings)
         self.documents_loaded = True
         
-        # Save vectorstore locally
         logger.info("Saving vectorstore...")
         os.makedirs(os.path.dirname(self.local_vectorstore_path), exist_ok=True)
         with open(self.local_vectorstore_path, 'wb') as f:
@@ -260,7 +244,7 @@ class LabourLawRAG:
         self, 
         query: str, 
         country: Optional[str] = None,
-        top_k: int = 4
+        top_k: int = 6
     ) -> List[Document]:
         """
         Search for relevant documents, optionally filtered by country
@@ -276,7 +260,7 @@ class LabourLawRAG:
         # Search with similarity
         if country:
             # Search with increased k to ensure we get enough results for the country
-            search_k = top_k * 5
+            search_k = top_k * 8
             
             try:
                 # Get all results first
@@ -337,11 +321,14 @@ You provide accurate, clear, and supportive answers to working mothers about the
 
 Guidelines:
 - Base your answer ONLY on the provided context from official labour law documents
+- When asked "who do I report to" or similar questions, ALWAYS identify the specific authority mentioned in the context.
+- Always cite specific section numbers from the law (e.g., "Section 57" or "Section 55(2)")
+- Be specific with numbers and timeframes - use exact terms from the law (e.g., "at least 12 weeks" not "several weeks")
+- If the context mentions complaint procedures, state them clearly and step-by-step
 - Be clear, supportive, and practical in your advice
-- If information is specific to certain countries, state this clearly
-- If the context doesn't contain enough information, say so honestly
-- Focus on rights related to maternity leave, workplace discrimination, flexible work, and career protection
+- Focus on actionable information - what the person should do, where to go, what documentation to bring
 - Use simple, accessible language
+- If the context doesn't contain enough information, say so honestly
 """
 
         # Construct messages for OpenAI chat API
@@ -360,12 +347,19 @@ Guidelines:
 Labour Law Context:
 {context}
 
-Please provide a clear, accurate answer based ONLY on the information above. Structure your response naturally with these elements:
+Please provide a clear, accurate answer based ONLY on the information above.
 
-1. Start with a direct answer (2-3 sentences)
-2. List the relevant legal rights or provisions
-3. Provide practical advice
-4. Note any country-specific differences if applicable
+CRITICAL REQUIREMENTS:
+1. If the question asks "who do I report to" or "where do I complain", you MUST identify the specific authority/commission/body mentioned in the context (e.g., National Labour Commission, Chief Labour Officer, Minister, etc.)
+2. Always cite specific section numbers when referencing legal provisions (e.g., "Section 57" or "Section 55(2)")
+3. If the context mentions complaint procedures, explicitly state them
+4. Be specific about rights - use exact terms from the law (e.g., "at least 12 weeks" not "several weeks")
+
+Structure your response naturally:
+1. Start with a direct answer identifying the specific reporting authority if asked
+2. List the relevant legal rights with section numbers
+3. Provide practical step-by-step advice for taking action
+4. Note any important protections or consequences
 
 Important: Write naturally and conversationally. Use proper paragraphs and bullet points where appropriate. Do NOT include section labels or headers in your response - just provide the information in a flowing, readable format.
 
