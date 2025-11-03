@@ -54,7 +54,7 @@ class LabourLawRAG:
                 logger.warning("GDRIVE_FILE_ID not set - skipping Google Drive download")
                 return False
             
-            #Check if file already exists locally
+            # Check if file already exists locally
             if os.path.exists(self.local_vectorstore_path):
                 logger.info(f"Vectorstore file already exists at {self.local_vectorstore_path}")
                 return True
@@ -82,7 +82,6 @@ class LabourLawRAG:
             if not success:
                 try:
                     logger.info("Attempting direct download...")
-                    import requests
                     
                     # Use the direct download link format
                     download_url = f"https://drive.google.com/uc?export=download&id={self.gdrive_file_id}"
@@ -263,21 +262,39 @@ class LabourLawRAG:
         country: Optional[str] = None,
         top_k: int = 4
     ) -> List[Document]:
+        """
+        Search for relevant documents, optionally filtered by country
+        
+        Args:
+            query: The search query
+            country: Country name to filter by (e.g., "Ghana")
+            top_k: Number of top results to return
+        """
         if not self.documents_loaded or not self.vectorstore:
             raise ValueError("Documents not loaded. Call load_and_process_documents() first.")
         
         # Search with similarity
         if country:
-            # Filter by country in metadata
-            search_kwargs = {
-                "k": top_k * 2,
-                "filter": {"country": country}
-            }
+            # Search with increased k to ensure we get enough results for the country
+            search_k = top_k * 5
+            
             try:
-                docs = self.vectorstore.similarity_search(query, **search_kwargs)
-                if not docs:
+                # Get all results first
+                all_docs = self.vectorstore.similarity_search(query, k=search_k)
+                
+                # Filter for selected country (case-insensitive)
+                country_lower = country.lower()
+                filtered_docs = [
+                    doc for doc in all_docs 
+                    if doc.metadata.get('country', '').lower() == country_lower
+                ]
+                
+                if not filtered_docs:
                     logger.warning(f"No results for {country}, searching all countries")
                     docs = self.vectorstore.similarity_search(query, k=top_k)
+                else:
+                    docs = filtered_docs[:top_k]
+                    
             except Exception as e:
                 logger.warning(f"Filtered search failed: {e}, using unfiltered search")
                 docs = self.vectorstore.similarity_search(query, k=top_k)
@@ -293,6 +310,7 @@ class LabourLawRAG:
         user_context: Optional[str] = None,
         chat_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict:
+        """Generate an answer using RAG with proper formatting"""
         if not self.documents_loaded:
             raise ValueError("Documents not loaded. Call load_and_process_documents() first.")
         
@@ -342,166 +360,16 @@ Guidelines:
 Labour Law Context:
 {context}
 
-Please provide a clear, accurate answer based ONLY on the information above. Structure your response with:
-1. Direct answer to the question
-2. Relevant legal provisions or rights
-3. Practical advice for working mothers
-4. Any country-specific differences if applicable
+Please provide a clear, accurate answer based ONLY on the information above. Structure your response naturally with these elements:
 
-IMPORTANT FORMATTING: Structure your response with clear spacing and line breaks:
+1. Start with a direct answer (2-3 sentences)
+2. List the relevant legal rights or provisions
+3. Provide practical advice
+4. Note any country-specific differences if applicable
 
-1. Direct answer to the question
-   - Use bullet points for multiple items
-   - Add a blank line after this section
-
-2. Relevant legal provisions or rights
-   - List specific legal references
-   - Add a blank line after this section
-
-3. Practical advice for working mothers
-   - Provide actionable steps
-   - Add a blank line after this section
-
-4. Any country-specific differences if applicable
-   - Note variations between countries
-   - Add a blank line after this section
-
-Use double line breaks between each numbered section for better readability.
+Important: Write naturally and conversationally. Use proper paragraphs and bullet points where appropriate. Do NOT include section labels or headers in your response - just provide the information in a flowing, readable format.
 
 If the context doesn't contain the answer, say so clearly."""
-        
-        messages.append({"role": "user", "content": user_prompt})
-
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=800
-            )
-
-            answer = response.choices[0].message.content.strip()
-            answer = self._clean_answer_formatting(answer)
-
-
-            # Extract sources
-            sources = []
-            seen_sources = set()
-            for doc in relevant_docs:
-                source_key = f"{doc.metadata.get('country', 'Unknown')}_{doc.metadata.get('source', 'Unknown')}"
-                if source_key not in seen_sources:
-                    sources.append({
-                        "country": doc.metadata.get('country', 'Unknown'),
-                        "document": doc.metadata.get('source', 'Unknown'),
-                        "excerpt": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-                    })
-                    seen_sources.add(source_key)
-
-            # Update chat history
-            updated_history = (chat_history or [])[-8:]
-            updated_history.append({"role": "user", "content": query})
-            updated_history.append({"role": "assistant", "content": answer})
-
-            return {
-                "answer": answer,
-                "sources": sources,
-                "country": country if country else "Multiple countries",
-                "confidence": "high" if len(relevant_docs) >= 3 else "medium",
-                "query": query,
-                "chat_history": updated_history
-            }
-
-        except Exception as e:
-            logger.error(f"Error generating answer: {e}")
-            return {
-                "answer": "I encountered an error processing your question. Please try rephrasing it.",
-                "sources": [],
-                "country": country,
-                "confidence": "error",
-                "error": str(e),
-                "chat_history": chat_history or []
-            }
-            
-    def generate_answer(self, query: str, country: Optional[str] = None,user_context: Optional[str] = None,chat_history: Optional[List[Dict[str, str]]] = None) -> Dict:
-        if not self.documents_loaded:
-            raise ValueError("Documents not loaded. Call load_and_process_documents() first.")
-        
-        logger.info(f"Searching for: {query}" + (f" in {country}" if country else ""))
-        relevant_docs = self.search_relevant_documents(query, country)
-
-        if not relevant_docs:
-            return {
-                "answer": "I couldn't find specific information about that in the labour law documents. Could you rephrase your question or specify a country?",
-                "sources": [],
-                "country": country,
-                "confidence": "low",
-                "chat_history": chat_history or []
-            }
-
-        # Prepare RAG context
-        context = "\n\n".join([
-            f"[Source: {doc.metadata.get('country', 'Unknown')} - {doc.metadata.get('source', 'Unknown')}]\n{doc.page_content}"
-            for doc in relevant_docs
-        ])
-
-        system_prompt = """You are a helpful labour law assistant specializing in African countries.
-    You provide accurate, clear, and supportive answers to working mothers about their labour rights.
-
-    Guidelines:
-    - Base your answer ONLY on the provided context from official labour law documents
-    - Be clear, supportive, and practical in your advice
-    - If information is specific to certain countries, state this clearly
-    - If the context doesn't contain enough information, say so honestly
-    - Focus on rights related to maternity leave, workplace discrimination, flexible work, and career protection
-    - Use simple, accessible language
-    """
-
-        # Construct messages for OpenAI chat API
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # Limit history to last 8 turns
-        if chat_history:
-            truncated = chat_history[-8:]
-            messages.extend(truncated)
-
-        # Add the current question with context and IMPROVED formatting instructions
-        user_prompt = f"""Question: {query}
-
-    {f"User Context: {user_context}" if user_context else ""}
-
-    Labour Law Context:
-    {context}
-
-    Please provide a clear, accurate answer based ONLY on the information above.
-
-    FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
-
-    **Direct Answer:**
-    [Provide a clear 2-3 sentence answer to the question]
-
-    **Legal Provisions:**
-    [List the specific legal rights or provisions, one per line with bullet points]
-    • Right 1
-    • Right 2
-    • Right 3
-
-    **Practical Advice:**
-    [Provide actionable steps the person can take]
-    • Action 1
-    • Action 2
-    • Action 3
-
-    **Country-Specific Notes:**
-    [If applicable, note any variations between countries]
-
-    CRITICAL FORMATTING RULES:
-    1. Use double line breaks (\\n\\n) between each major section
-    2. Use bullet points (•) for lists, with one item per line
-    3. Keep paragraphs concise (2-4 sentences maximum)
-    4. Add a blank line after section headers
-    5. Use clear section headers with ** markdown bold **
-
-    If the context doesn't contain the answer, say so clearly and suggest what additional information would help."""
         
         messages.append({"role": "user", "content": user_prompt})
 
@@ -556,21 +424,58 @@ If the context doesn't contain the answer, say so clearly."""
                 "chat_history": chat_history or []
             }
 
-
     def _clean_answer_formatting(self, answer: str) -> str:
+        """Clean and format the answer with proper spacing"""
+        # Replace escaped newlines
         answer = answer.replace('\\n', '\n')
-        answer = re.sub(r'(\n)(\d+\.)', r'\n\n\2', answer)
+        
+        # Remove common formatting artifacts from GPT responses
+        # Remove markdown code blocks
+        answer = re.sub(r'```json\s*', '', answer)
+        answer = re.sub(r'```\s*', '', answer)
+        
+        # Remove explicit section headers that GPT might add
+        answer = re.sub(r'\*\*Direct Answer:\*\*\s*', '', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'\*\*Legal Provisions:\*\*\s*', '\n\n', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'\*\*Practical Advice:\*\*\s*', '\n\n', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'\*\*Country-Specific Notes:\*\*\s*', '\n\n', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'Direct Answer:\s*', '', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'Legal Provisions:\s*', '\n\n', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'Practical Advice:\s*', '\n\n', answer, flags=re.IGNORECASE)
+        answer = re.sub(r'Country-Specific Notes:\s*', '\n\n', answer, flags=re.IGNORECASE)
+        
+        # Add double line breaks before numbered lists
+        answer = re.sub(r'([^\n])(\n)(\d+\.)', r'\1\n\n\3', answer)
+        
+        # Add double line breaks before bullet points
         answer = re.sub(r'([^\n])(\n)([-•*])', r'\1\n\n\3', answer)
-        answer = re.sub(r'(\.)(\s*)([A-Z])', lambda m: f'{m.group(1)}\n\n{m.group(3)}' if len(m.group(2)) > 1 else f'{m.group(1)} {m.group(3)}', answer)
-        answer = re.sub(r'(\n)([A-Z][^:\n]+:)', r'\n\n\2', answer)
+        
+        # Normalize multiple newlines to maximum of 2
         answer = re.sub(r'\n{3,}', '\n\n', answer)
+        
+        # Remove trailing whitespace from lines
         answer = re.sub(r'[ \t]+\n', '\n', answer)
-        answer = re.sub(r'\n[ \t]+', '\n', answer)
+        
+        # Remove leading whitespace from lines (but preserve bullet point indentation)
+        lines = answer.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            if line.strip().startswith(('•', '-', '*', '1', '2', '3', '4', '5', '6', '7', '8', '9')):
+                cleaned_lines.append(line.strip())
+            else:
+                cleaned_lines.append(line.strip())
+        answer = '\n'.join(cleaned_lines)
+        
+        # Ensure bullet points have space after them
         answer = re.sub(r'([-•*])([^\s])', r'\1 \2', answer)
+        
+        # Remove any remaining quotes around the entire answer
+        answer = answer.strip('"\'')
         
         return answer.strip()
     
     def reload_from_gdrive(self) -> int:
+        """Force reload vectorstore from Google Drive"""
         logger.info("Force reloading vectorstore from Google Drive...")
         
         if os.path.exists(self.local_vectorstore_path):
@@ -593,9 +498,11 @@ If the context doesn't contain the answer, say so clearly."""
         return len(self.vectorstore.docstore._dict)
     
     def get_supported_countries(self) -> List[str]:
+        """Return list of supported countries"""
         return self.supported_countries
     
     def get_system_stats(self) -> Dict:
+        """Get system statistics"""
         if not self.vectorstore:
             return {
                 "documents_loaded": False,
@@ -618,11 +525,17 @@ If the context doesn't contain the answer, say so clearly."""
 _rag_instance = None
 
 def get_rag_instance() -> LabourLawRAG:
+    """Get or create global RAG instance"""
     global _rag_instance
     if _rag_instance is None:
         _rag_instance = LabourLawRAG()
     return _rag_instance
 
-def initialize_rag_system(pdf_directory: str = "labour_laws", force_reload: bool = False,use_gdrive: bool = True) -> int:
+def initialize_rag_system(
+    pdf_directory: str = "labour_laws", 
+    force_reload: bool = False,
+    use_gdrive: bool = True
+) -> int:
+    """Initialize the RAG system"""
     rag = get_rag_instance()
     return rag.load_and_process_documents(force_reload=force_reload, use_gdrive=use_gdrive)
