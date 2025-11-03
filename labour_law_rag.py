@@ -438,19 +438,14 @@ If the context doesn't contain the answer, say so clearly."""
         answer = re.sub(r'Practical Advice:\s*', '\n\n', answer, flags=re.IGNORECASE)
         answer = re.sub(r'Country-Specific Notes:\s*', '\n\n', answer, flags=re.IGNORECASE)
         
-        # Add double line breaks before numbered lists
         answer = re.sub(r'([^\n])(\n)(\d+\.)', r'\1\n\n\3', answer)
         
-        # Add double line breaks before bullet points
         answer = re.sub(r'([^\n])(\n)([-•*])', r'\1\n\n\3', answer)
         
-        # Normalize multiple newlines to maximum of 2
         answer = re.sub(r'\n{3,}', '\n\n', answer)
         
-        # Remove trailing whitespace from lines
         answer = re.sub(r'[ \t]+\n', '\n', answer)
         
-        # Remove leading whitespace from lines (but preserve bullet point indentation)
         lines = answer.split('\n')
         cleaned_lines = []
         for line in lines:
@@ -460,16 +455,13 @@ If the context doesn't contain the answer, say so clearly."""
                 cleaned_lines.append(line.strip())
         answer = '\n'.join(cleaned_lines)
         
-        # Ensure bullet points have space after them
         answer = re.sub(r'([-•*])([^\s])', r'\1 \2', answer)
         
-        # Remove any remaining quotes around the entire answer
         answer = answer.strip('"\'')
         
         return answer.strip()
     
     def reload_from_gdrive(self) -> int:
-        """Force reload vectorstore from Google Drive"""
         logger.info("Force reloading vectorstore from Google Drive...")
         
         if os.path.exists(self.local_vectorstore_path):
