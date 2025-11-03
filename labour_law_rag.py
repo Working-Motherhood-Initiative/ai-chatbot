@@ -61,10 +61,8 @@ class LabourLawRAG:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(self.local_vectorstore_path), exist_ok=True)
             
-            # Try multiple download methods
             success = False
             
-            # Method 1: Try gdown with fuzzy option
             try:
                 logger.info("Attempting download with gdown (fuzzy mode)...")
                 url = f"https://drive.google.com/uc?id={self.gdrive_file_id}"
@@ -321,7 +319,7 @@ You provide accurate, clear, and supportive answers to working mothers about the
 
 Guidelines:
 - Base your answer ONLY on the provided context from official labour law documents
-- When asked "who do I report to" or similar questions, ALWAYS identify the specific authority mentioned in the context.
+- When asked "who do I report to" or similar questions, ALWAYS identify the specific authority mentioned in the context.Mention the specific institutions full name.
 - Always cite specific section numbers from the law (e.g., "Section 57" or "Section 55(2)")
 - Be specific with numbers and timeframes - use exact terms from the law (e.g., "at least 12 weeks" not "several weeks")
 - If the context mentions complaint procedures, state them clearly and step-by-step
@@ -329,6 +327,7 @@ Guidelines:
 - Focus on actionable information - what the person should do, where to go, what documentation to bring
 - Use simple, accessible language
 - If the context doesn't contain enough information, say so honestly
+- DO NOT hallucinate or make up answers.
 """
 
         # Construct messages for OpenAI chat API
