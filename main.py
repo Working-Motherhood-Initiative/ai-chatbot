@@ -1,28 +1,28 @@
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends, status, Form
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException, Depends, status, Form, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
-import secrets
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import openai
 import os
+import asyncio
+import threading
+import secrets
+import openai
 from dotenv import load_dotenv
 import pdfminer.high_level
 from docx import Document
 from job_fetcher import find_jobs_from_sentence, preload_job_embeddings, get_all_jobs
-from datetime import datetime
+from labour_law_rag import get_rag_instance, initialize_rag_system
+from datetime import datetime, timedelta
 import logging
 import json
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple , Any, Set
 import re
 import base64
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from typing import List, Dict, Tuple, Set
 from collections import Counter
 from pydantic import BaseModel
-from typing import Dict, Any
-from labour_law_rag import get_rag_instance, initialize_rag_system
 from assessment_questions import (
     ASSESSMENT_QUESTIONS,
     calculate_assessment_scores,
@@ -30,8 +30,7 @@ from assessment_questions import (
     get_assessment_instructions,
     validate_responses
 )
-import asyncio
-import threading
+
 
 class LabourLawQuery(BaseModel):
     query: str
@@ -43,7 +42,55 @@ class AssessmentResponse(BaseModel):
     career_readiness: Dict[str, str]
     work_life_balance: Dict[str, str]
 
-# Security and authentication
+class SessionStore:
+    def __init__(self):
+        self.sessions: Dict[str, dict] = {}
+        
+    def create_session(self) -> str:
+        session_id = secrets.token_urlsafe(32)
+        self.sessions[session_id] = {
+            "created": datetime.now(),
+            "expires": datetime.now() + timedelta(hours=2),
+            "requests": 0
+        }
+        logger.info(f"Created new session: {session_id[:8]}...")
+        return session_id
+    
+    def validate_session(self, session_id: str) -> bool:
+        if session_id not in self.sessions:
+            return False
+        
+        session = self.sessions[session_id]
+        if session["expires"] < datetime.now():
+            del self.sessions[session_id]
+            return False
+        
+        session["requests"] += 1
+        return True
+    
+    def cleanup_expired(self):
+        now = datetime.now()
+        expired = [sid for sid, data in self.sessions.items() 
+                  if data["expires"] < now]
+        for sid in expired:
+            del self.sessions[sid]
+        if expired:
+            logger.info(f"Cleaned up {len(expired)} expired sessions")
+    
+    def get_stats(self):
+        return {
+            "active_sessions": len(self.sessions),
+            "total_sessions": len(self.sessions)
+        }
+
+session_store = SessionStore()
+
+async def cleanup_sessions_periodically():
+    while True:
+        await asyncio.sleep(300)  # Every 5 minutes
+        session_store.cleanup_expired()
+        logger.info(f"Session stats: {session_store.get_stats()}")
+
 security = HTTPBearer()
 API_TOKEN = os.getenv("API_TOKEN")
 if not API_TOKEN:
@@ -58,19 +105,35 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         )
     return credentials.credentials
 
-# Logging setup
+async def verify_session(
+    authorization: Optional[str] = Header(None)
+) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing session token. Please refresh the page."
+        )
+    
+    session_id = authorization.replace("Bearer ", "")
+    
+    if not session_store.validate_session(session_id):
+        raise HTTPException(
+            status_code=401,
+            detail="Session expired. Please refresh the page."
+        )
+    
+    return session_id
+
 log_level = os.getenv("LOG_LEVEL", "INFO")
 logging.basicConfig(level=getattr(logging, log_level))
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
 app = FastAPI(
     title="Motherboard Career Assistant API", 
     version="1.0.0",
     description="API for the Motherboard Career Assistant - helping mothers navigate work and career"
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -85,10 +148,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load environment variables
 load_dotenv()
 
-# Initialize OpenAI client
 try:
     openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 except Exception as e:
@@ -97,7 +158,7 @@ except Exception as e:
 
 _initialization_complete = False
 _initialization_error = None
-# PRIVACY PROTECTION FUNCTIONS
+
 
 def remove_personal_info_from_cv(cv_text: str) -> str:
     try:
@@ -105,35 +166,31 @@ def remove_personal_info_from_cv(cv_text: str) -> str:
             logger.warning("Empty CV text provided for privacy protection")
             return ""
             
-        # Make a copy to work with
         cleaned_text = cv_text
         
-        # 1. Remove email addresses
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
         cleaned_text = re.sub(email_pattern, '[EMAIL REMOVED]', cleaned_text)
         
-        # 2. Remove phone numbers (various formats)
         phone_patterns = [
-            r'\+?\d{1,4}[\s\-\(\)]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}',  # General international
-            r'\b\d{3}[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b',  # US format
-            r'\+\d{1,3}\s?\d{1,4}\s?\d{1,4}\s?\d{1,9}',  # International with country code
-            r'\(\d{3}\)\s?\d{3}[\s\-]?\d{4}',  # (XXX) XXX-XXXX format
+            r'\+?\d{1,4}[\s\-\(\)]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}',
+            r'\b\d{3}[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b',
+            r'\+\d{1,3}\s?\d{1,4}\s?\d{1,4}\s?\d{1,9}',
+            r'\(\d{3}\)\s?\d{3}[\s\-]?\d{4}',
         ]
         
         for pattern in phone_patterns:
             cleaned_text = re.sub(pattern, '[PHONE REMOVED]', cleaned_text)
         
-        # 3. Remove addresses
         address_patterns = [
             r'\b\d+\s+[A-Za-z\s]+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Way|Place|Pl)\b.*',
-            r'\b\d+[A-Za-z]?\s+[A-Za-z\s]+\d{5}(-\d{4})?\b',  # Address with ZIP
-            r'\b[A-Za-z\s]+,\s*[A-Za-z\s]+\s*\d{5}(-\d{4})?\b',  # City, State ZIP
+            r'\b\d+[A-Za-z]?\s+[A-Za-z\s]+\d{5}(-\d{4})?\b',
+            r'\b[A-Za-z\s]+,\s*[A-Za-z\s]+\s*\d{5}(-\d{4})?\b',
         ]
         
         for pattern in address_patterns:
             cleaned_text = re.sub(pattern, '[ADDRESS REMOVED]', cleaned_text, flags=re.IGNORECASE)
         
-        # 4. Remove potential names from the beginning of CV (first 500 characters)
+        # 4. Remove potential names from the beginning of CV
         header_section = cleaned_text[:500]
         main_section = cleaned_text[500:]
         
@@ -143,43 +200,37 @@ def remove_personal_info_from_cv(cv_text: str) -> str:
         for i, line in enumerate(lines):
             line = line.strip()
             
-            # Skip very short lines
             if len(line) < 3:
                 filtered_header_lines.append(line)
                 continue
                 
             words = line.split()
             
-            # Check if line looks like a name (2-4 words, mostly letters, title case)
             if (2 <= len(words) <= 4 and 
                 all(word.replace('.', '').replace(',', '').isalpha() for word in words) and
                 any(word[0].isupper() for word in words if len(word) > 0) and
-                i < 5):  # Only check first 5 lines
-                # Likely a name, skip it
+                i < 5):
                 continue
             
-            # Check if line contains career-relevant keywords - if so, keep it
             career_keywords = ['objective', 'summary', 'profile', 'experience', 'education', 
                               'skills', 'qualifications', 'employment', 'work', 'career',
                               'professional', 'expertise', 'background', 'achievements']
             
             if any(keyword in line.lower() for keyword in career_keywords):
                 filtered_header_lines.append(line)
-            elif len(words) > 4:  # Longer lines are likely professional content
+            elif len(words) > 4:
                 filtered_header_lines.append(line)
             else:
-                # For ambiguous short lines, keep them
                 filtered_header_lines.append(line)
         
-        # Reconstruct the text
         cleaned_header = '\n'.join(filtered_header_lines)
         cleaned_text = cleaned_header + '\n' + main_section
         
-        # 5. Remove social security numbers, national ID numbers
+        # 5. Remove social security numbers
         ssn_pattern = r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b'
         cleaned_text = re.sub(ssn_pattern, '[ID REMOVED]', cleaned_text)
         
-        # 6. Remove LinkedIn URLs but keep the fact that they have LinkedIn
+        # 6. Remove LinkedIn URLs
         linkedin_pattern = r'https?://(?:www\.)?linkedin\.com/in/[^\s]+'
         cleaned_text = re.sub(linkedin_pattern, '[LINKEDIN PROFILE]', cleaned_text)
         
@@ -205,7 +256,7 @@ def remove_personal_info_from_cv(cv_text: str) -> str:
         cleaned_text = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_text)
         cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text)
         
-        # 10. Add privacy notice at the beginning
+        # 10. Add privacy notice
         privacy_notice = "=== PRIVACY-PROTECTED CV ANALYSIS ===\n[Personal identifying information has been removed for privacy protection]\n\n"
         cleaned_text = privacy_notice + cleaned_text.strip()
         
@@ -225,7 +276,6 @@ def validate_privacy_protection(original_text: str, cleaned_text: str) -> Dict:
     }
     
     try:
-        # Check for email addresses
         emails_in_original = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', original_text)
         emails_in_cleaned = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', cleaned_text)
         
@@ -233,7 +283,6 @@ def validate_privacy_protection(original_text: str, cleaned_text: str) -> Dict:
             validation_results["privacy_check_passed"] = False
             validation_results["issues_found"].append(f"EMAIL LEAK: {len(emails_in_cleaned)} email(s) still present")
         
-        # Check for phone numbers
         phone_patterns = [
             r'\+?\d{1,4}[\s\-\(\)]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}',
             r'\b\d{3}[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b',
@@ -244,14 +293,12 @@ def validate_privacy_protection(original_text: str, cleaned_text: str) -> Dict:
         for pattern in phone_patterns:
             phones_in_cleaned.extend(re.findall(pattern, cleaned_text))
         
-        # Filter out false positives (years, common numbers)
         phones_in_cleaned_filtered = [p for p in phones_in_cleaned if not re.match(r'^(19|20)\d{2}$', p.replace('-', '').replace(' ', '').replace('(', '').replace(')', ''))]
         
         if phones_in_cleaned_filtered:
             validation_results["privacy_check_passed"] = False
             validation_results["issues_found"].append(f"PHONE LEAK: {len(phones_in_cleaned_filtered)} phone(s) still present")
         
-        # Overall statistics
         validation_results["statistics"] = {
             "original_length": len(original_text),
             "cleaned_length": len(cleaned_text),
@@ -273,7 +320,6 @@ def log_privacy_protection(original_cv: str, cleaned_cv: str, endpoint: str):
     try:
         validation = validate_privacy_protection(original_cv, cleaned_cv)
         
-        # Log the results
         logger.info(f"=== PRIVACY PROTECTION LOG - {endpoint} ===")
         logger.info(f"Reduction: {validation['statistics']['reduction_percentage']}%")
         logger.info(f"Issues Found: {validation['statistics']['total_issues_found']}")
@@ -283,7 +329,6 @@ def log_privacy_protection(original_cv: str, cleaned_cv: str, endpoint: str):
         else:
             logger.info("Privacy protection successful - no issues found")
         
-        # Log statistics
         logger.info(f"Emails removed: {validation['statistics']['emails_removed']}")
         logger.info(f"Phones removed: {validation['statistics']['phones_removed']}")
         
@@ -312,7 +357,6 @@ def extract_text_from_docx(file):
 
 def extract_skills_from_cv(cv_text: str) -> List[str]:
     try:
-        # Apply privacy protection before sending to OpenAI
         cleaned_cv_text = remove_personal_info_from_cv(cv_text)
         
         messages = [
@@ -386,19 +430,19 @@ def get_match_ranking(overall_score: int) -> Dict[str, str]:
     if overall_score >= 80:
         return {
             "level": "High",
-            "color": "#059669",  # Green
+            "color": "#059669",
             "description": "Excellent match - strongly recommended to apply"
         }
     elif overall_score >= 50:
         return {
             "level": "Medium", 
-            "color": "#f59e0b",  # Amber
+            "color": "#f59e0b",
             "description": "Good match - consider applying with CV improvements"
         }
     else:
         return {
             "level": "Low",
-            "color": "#ef4444",  # Red
+            "color": "#ef4444",
             "description": "Weak match - significant improvements needed"
         }
 
@@ -414,13 +458,10 @@ def calculate_keyword_match(cv_text: str, job_description: str) -> float:
     return (matches / len(job_keywords)) * 100
 
 def extract_important_keywords(text: str) -> List[str]:
-    # Technical skills pattern
     tech_pattern = r'\b(python|javascript|java|react|angular|sql|html|css|git|aws|azure|docker|kubernetes|salesforce|hubspot|excel|powerpoint|google analytics|photoshop|illustrator|figma|canva)\b'
     
-    # Soft skills pattern  
     soft_pattern = r'\b(leadership|management|communication|teamwork|problem[\-\s]solving|analytical|creative|organized|customer service|project management)\b'
     
-    # Industry terms
     industry_pattern = r'\b(marketing|sales|finance|healthcare|education|technology|consulting|administration|operations|human resources)\b'
     
     keywords = []
@@ -428,7 +469,6 @@ def extract_important_keywords(text: str) -> List[str]:
         matches = re.findall(pattern, text, re.IGNORECASE)
         keywords.extend(matches)
     
-    # Extract capitalized terms (likely tools/skills)
     capitalized = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*\b', text)
     keywords.extend([cap for cap in capitalized if len(cap) > 2 and cap.isupper() == False])
     
@@ -446,13 +486,11 @@ def calculate_skills_match(cv_text: str, job_description: str) -> float:
     cv_lower = cv_text.lower()
     job_lower = job_description.lower()
     
-    # Find skills mentioned in job
     job_skills = [skill for skill in common_skills if skill in job_lower]
     
     if not job_skills:
         return 60.0
     
-    # Count CV skills that match job requirements
     cv_matches = [skill for skill in job_skills if skill in cv_lower]
     
     return (len(cv_matches) / len(job_skills)) * 100
@@ -474,9 +512,8 @@ def calculate_experience_match(cv_text: str, job_description: str, job_title: st
         else:
             exp_score = 50
     else:
-        exp_score = 75  # Neutral when can't determine
+        exp_score = 75
     
-    # Check for relevant job title/industry mentions
     title_words = job_title.lower().split()
     cv_lower = cv_text.lower()
     title_relevance = sum(20 for word in title_words if len(word) > 3 and word in cv_lower)
@@ -502,7 +539,7 @@ def calculate_semantic_similarity(cv_text: str, job_description: str) -> float:
             ngram_range=(1, 2)
         )
         
-        documents = [cv_text[:2000], job_description[:1000]]  # Limit length
+        documents = [cv_text[:2000], job_description[:1000]]
         tfidf_matrix = vectorizer.fit_transform(documents)
         similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
         
@@ -526,7 +563,6 @@ def identify_strengths(cv_text: str, job_description: str) -> List[str]:
     strengths = [kw for kw in job_keywords if kw.lower() in cv_lower]
     return strengths[:5]
 
-# FILE SIZE LIMIT CONSTANT
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 
 def validate_file_size(file: UploadFile):
@@ -543,7 +579,6 @@ def initialize_background():
         jobs = get_all_jobs()
         logger.info(f"Successfully loaded {len(jobs)} jobs")
         
-        # Initialize Labour Law RAG System from Google Drive
         logger.info("Initializing Labour Law RAG system...")
         try:
             doc_count = initialize_rag_system(
@@ -574,7 +609,7 @@ def initialize_background():
 @app.on_event("startup")
 async def startup_event():
     try:
-        # Test privacy protection on startup (quick)
+        # Test privacy protection
         test_text = "John Doe john@email.com (555) 123-4567 Professional Summary: Software developer"
         cleaned = remove_personal_info_from_cv(test_text)
         if "john@email.com" in cleaned:
@@ -582,9 +617,12 @@ async def startup_event():
         logger.info("Privacy protection startup test passed")
         
         logger.info("API server starting...")
-        logger.info("Running heavy initialization in background thread...")
+        logger.info("Session management initialized")
         
-        # Start initialization in background thread - don't block
+        # Start session cleanup
+        asyncio.create_task(cleanup_sessions_periodically())
+        
+        logger.info("Running heavy initialization in background thread...")
         init_thread = threading.Thread(target=initialize_background, daemon=True)
         init_thread.start()
         
@@ -592,7 +630,6 @@ async def startup_event():
         logger.error(f"Startup error: {e}")
         raise
 
-# Add a health check endpoint that reports initialization status
 @app.get("/init-status")
 async def initialization_status():
     return JSONResponse({
@@ -603,6 +640,7 @@ async def initialization_status():
 
 @app.post("/admin/reload-vectorstore")
 async def admin_reload_vectorstore(token: str = Depends(verify_token)):
+    """Admin endpoint - still uses API token"""
     try:
         logger.info("Admin: Manual vectorstore reload initiated...")
         
@@ -625,8 +663,16 @@ async def admin_reload_vectorstore(token: str = Depends(verify_token)):
                 "details": str(e)
             }
         )
-        
-            
+
+@app.post("/create-session")
+async def create_session():
+    """Create a new session for the frontend - NO AUTH REQUIRED"""
+    session_id = session_store.create_session()
+    return {
+        "session_id": session_id,
+        "expires_in_hours": 2,
+        "message": "Session created successfully"
+    }
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -652,6 +698,7 @@ async def root():
             .method {{ color: #28a745; font-weight: bold; }}
             .new-feature {{ background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%); border-left: 4px solid #764ba2; }}
             .privacy-feature {{ background: linear-gradient(135deg, #fff0f0 0%, #ffe8e8 100%); border-left: 4px solid #dc3545; }}
+            .session-feature {{ background: linear-gradient(135deg, #f0fff4 0%, #e8ffe8 100%); border-left: 4px solid #10b981; }}
             .status-enabled {{ color: #28a745; font-weight: bold; }}
             .status-disabled {{ color: #6c757d; }}
         </style>
@@ -659,12 +706,24 @@ async def root():
     <body>
         <div class="container">
             <h1>Motherboard Career Assistant API</h1>
-            <p>Welcome to the Motherboard Career Assistant API - helping mothers navigate work and career with <strong>privacy protection!</strong></p>
+            <p>Welcome to the Motherboard Career Assistant API - helping mothers navigate work and career with <strong>privacy protection & session security!</strong></p>
             
             <h2>API Status</h2>
-            <p>Status: <span style="color: green;">Running with Privacy Protection</span></p>
+            <p>Status: <span style="color: green;">Running with Privacy Protection & Session Management</span></p>
             <p>Version: 1.0.0</p>
             <p>Google Drive Integration: <span class="status-{gdrive_class}">{gdrive_status}</span></p>
+            <p>Session System: <span class="status-enabled">Active</span></p>
+            
+            <div class="session-feature">
+                <h3> Session Management Active</h3>
+                <p>New secure session system:</p>
+                <ul>
+                    <li>No exposed API tokens in frontend</li>
+                    <li>2-hour session expiry with auto-refresh</li>
+                    <li>In-memory session storage (fast & free)</li>
+                    <li>Automatic cleanup of expired sessions</li>
+                </ul>
+            </div>
             
             <div class="privacy-feature">
                 <h3>Privacy Protection Active</h3>
@@ -681,68 +740,73 @@ async def root():
                 <h3>Google Drive Integration</h3>
                 <p>Labour law vectorstore now loads from Google Drive for faster startup:</p>
                 <ul>
-                    <li> Ultra-fast initialization (seconds vs minutes)</li>
-                    <li> No need for local PDF processing</li>
-                    <li> Easy updates - just replace file in Google Drive</li>
-                    <li> Automatic local caching for offline resilience</li>
+                    <li>Ultra-fast initialization (seconds vs minutes)</li>
+                    <li>No need for local PDF processing</li>
+                    <li>Easy updates - just replace file in Google Drive</li>
+                    <li>Automatic local caching for offline resilience</li>
                 </ul>
             </div>
             
             <h2>Available Endpoints</h2>
             
+            <div class="endpoint session-feature">
+                <span class="method">POST</span> <code>/create-session</code>
+                <p>Create a new session (public, no auth) - Sessions last 2 hours</p>
+            </div>
+            
             <div class="endpoint">
                 <span class="method">POST</span> <code>/welcome</code>
-                <p>Welcome and onboard new users</p>
+                <p>Welcome and onboard new users (requires session)</p>
             </div>
             
             <div class="endpoint privacy-feature">
                 <span class="method">POST</span> <code>/cv-tips</code>
-                <p>Upload CV file for personalized feedback (Privacy Protected)</p>
+                <p>Upload CV file for personalized feedback (Privacy Protected, requires session)</p>
             </div>
             
             <div class="endpoint">
                 <span class="method">POST</span> <code>/search-jobs</code>
-                <p>Search for jobs based on user query</p>
+                <p>Search for jobs based on user query (requires session)</p>
             </div>
             
             <div class="endpoint privacy-feature">
                 <span class="method">POST</span> <code>/cv-job-match</code>
-                <p>Analyze CV match against specific job posting (Privacy Protected)</p>
+                <p>Analyze CV match against specific job posting (Privacy Protected, requires session)</p>
             </div>
             
             <div class="endpoint new-feature">
                 <span class="method">GET</span> <code>/assessment-questions</code>
-                <p>Get MomFit assessment questions and instructions</p>
+                <p>Get MomFit assessment questions and instructions (requires session)</p>
             </div>
             
             <div class="endpoint new-feature">
                 <span class="method">POST</span> <code>/momfit-assessment</code>
-                <p>Submit MomFit assessment responses and get personalized feedback</p>
+                <p>Submit MomFit assessment responses and get personalized feedback (requires session)</p>
             </div>
             
             <div class="endpoint">
                 <span class="method">GET</span> <code>/assessment-stats</code>
-                <p>Get assessment statistics and metadata</p>
+                <p>Get assessment statistics and metadata (requires session)</p>
             </div>
 
             <div class="endpoint new-feature">
                 <span class="method">POST</span> <code>/labour-law-query</code>
-                <p>Ask questions about labour laws across 16 African countries (RAG-powered, Google Drive enabled)</p>
+                <p>Ask questions about labour laws across 16 African countries (RAG-powered, requires session)</p>
             </div>
             
             <div class="endpoint">
                 <span class="method">GET</span> <code>/labour-law-countries</code>
-                <p>Get list of supported countries for labour law queries</p>
+                <p>Get list of supported countries for labour law queries (requires session)</p>
             </div>
             
             <div class="endpoint new-feature">
                 <span class="method">POST</span> <code>/admin/reload-vectorstore</code>
-                <p>Manually reload vectorstore from Google Drive (Admin only)</p>
+                <p>Manually reload vectorstore from Google Drive (Admin only - requires API token)</p>
             </div>
             
             <div class="endpoint">
                 <span class="method">GET</span> <code>/health</code>
-                <p>Health check endpoint with privacy status and Google Drive info</p>
+                <p>Health check endpoint with privacy status and Google Drive info (no auth)</p>
             </div>
             
             <div class="endpoint">
@@ -751,8 +815,9 @@ async def root():
             </div>
             
             <h2>Authentication</h2>
-            <p>Most endpoints require authentication. Include your API token in the Authorization header:</p>
-            <code>Authorization: Bearer YOUR_API_TOKEN</code>
+            <p><strong>Public Endpoints:</strong> /create-session, /health, /docs (no auth needed)</p>
+            <p><strong>User Endpoints:</strong> Most endpoints require a session token from /create-session</p>
+            <p><strong>Admin Endpoints:</strong> /admin/* require API token: <code>Authorization: Bearer API_TOKEN</code></p>
             
             <h2>Documentation</h2>
             <p>Visit <a href="/docs">/docs</a> for interactive API documentation</p>
@@ -764,7 +829,7 @@ async def root():
 
 
 @app.post("/welcome")
-async def welcome_user(request: Request, token: str = Depends(verify_token)):
+async def welcome_user(request: Request, session: str = Depends(verify_session)):
     try:
         data = await request.json()
     except Exception:
@@ -773,20 +838,17 @@ async def welcome_user(request: Request, token: str = Depends(verify_token)):
     user_name = data.get("name", "there")
     returning_user = data.get("returning", False)
 
-
     welcome_message = f"Welcome back, {user_name}! How can I help you today?"
-    
 
     return JSONResponse({
         "response": welcome_message
     })
 
 @app.post("/labour-law-query")
-async def labour_law_query(request_data: LabourLawQuery,token: str = Depends(verify_token)):
+async def labour_law_query(request_data: LabourLawQuery, session: str = Depends(verify_session)):
     try:
         rag = get_rag_instance()
 
-        # Check if system is initialized
         if not rag.documents_loaded:
             return JSONResponse(
                 status_code=503,
@@ -796,14 +858,12 @@ async def labour_law_query(request_data: LabourLawQuery,token: str = Depends(ver
                 }
             )
 
-        # Validate query
         if not request_data.query or len(request_data.query.strip()) < 5:
             return JSONResponse(
                 status_code=400,
                 content={"error": "Please provide a valid question (minimum 5 characters)"}
             )
 
-        # Validate country if provided
         if request_data.country:
             supported_countries = rag.get_supported_countries()
             if request_data.country not in supported_countries:
@@ -817,19 +877,17 @@ async def labour_law_query(request_data: LabourLawQuery,token: str = Depends(ver
 
         logger.info(f"Labour law query: '{request_data.query}' for country: {request_data.country or 'All'}")
 
-        # Generate answer using RAG with chat history
         result = rag.generate_answer(
             query=request_data.query,
             country=request_data.country,
             user_context=request_data.user_context or "working mother seeking labour rights information",
-            chat_history=request_data.chat_history or []  # <-- Pass chat history
+            chat_history=request_data.chat_history or []
         )
 
-        # Return response with updated chat history
         return JSONResponse({
             "answer": result["answer"],
             "sources": result["sources"],
-            "chat_history": result.get("chat_history", []),  # <-- Return updated history
+            "chat_history": result.get("chat_history", []),
             "metadata": {
                 "country": result.get("country"),
                 "confidence": result.get("confidence"),
@@ -857,7 +915,7 @@ async def labour_law_query(request_data: LabourLawQuery,token: str = Depends(ver
 
 
 @app.get("/labour-law-countries")
-async def get_labour_law_countries(token: str = Depends(verify_token)):
+async def get_labour_law_countries(session: str = Depends(verify_session)):
     try:
         rag = get_rag_instance()
         countries = rag.get_supported_countries()
@@ -884,44 +942,37 @@ async def get_labour_law_countries(token: str = Depends(verify_token)):
         )
 
 
-
 @app.get("/jobs")
-async def get_all_available_jobs(token: str = Depends(verify_token)):
+async def get_all_available_jobs(session: str = Depends(verify_session)):
     try:
-        # Load all jobs from Google Sheet
         jobs = get_all_jobs()
         logger.info(f"Fetching all {len(jobs)} available jobs")
         
-        # Format all jobs with complete details
         complete_jobs = []
         for idx, job in enumerate(jobs):
             job_dict = dict(job)
             
-            # Remove only the embedding field
             if 'embedding' in job_dict:
                 del job_dict['embedding']
             
-            # Get the job description - try multiple possible column names
             description = (
                 job_dict.get("Job Description (Brief Summary)") or 
-                job_dict.get("Job Description (Brief Summary)  ") or  # Note: extra spaces
+                job_dict.get("Job Description (Brief Summary)  ") or
                 job_dict.get("Job Description") or 
                 "N/A"
             )
             
-            # Structure job with all required fields
             complete_job = {
                 "job_id": idx,
                 "job_title": job_dict.get("Job Title", "N/A"),
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
                 "job_type": job_dict.get("Job Type", "N/A"),
                 "industry": job_dict.get("Industry", "N/A"),
-                "job_description": description,  # Standardized field name
+                "job_description": description,
                 "location": job_dict.get("Location", "N/A"),
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
                 "skills_required": job_dict.get("Skills Required", "N/A"),
-                # Include any additional fields from your Google Sheet
                 "additional_fields": {k: v for k, v in job_dict.items() if k not in [
                     "Job Title", "Company Name", "Company", "Job Type", "Industry",
                     "Job Description (Brief Summary)", "Job Description (Brief Summary)  ",
@@ -956,9 +1007,8 @@ async def get_all_available_jobs(token: str = Depends(verify_token)):
         )
 
 
-# Optional: Keep search functionality as a separate endpoint if needed later
 @app.post("/search-jobs")
-async def search_jobs(request: Request, token: str = Depends(verify_token)):
+async def search_jobs(request: Request, session: str = Depends(verify_session)):
     try:
         data = await request.json()
         user_query = data.get("query", "")
@@ -967,20 +1017,17 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
         
         logger.info(f"Search - Query: '{user_query}', Country: '{country_filter}', Type: '{job_type_filter}'")
         
-        # Get all jobs if no query, otherwise search by query
         if not user_query.strip():
             jobs = get_all_jobs()
         else:
             jobs = find_jobs_from_sentence(user_query)
         
-        # Apply country filter
         if country_filter:
             jobs = [
                 job for job in jobs
                 if country_filter.lower() in job.get("Location", "").lower()
             ]
         
-        # Apply job type filter (remote, on-site, hybrid)
         if job_type_filter:
             job_type_lower = job_type_filter.lower()
             jobs = [
@@ -988,7 +1035,6 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
                 if job_type_lower in job.get("Job Type", "").lower()
             ]
         
-        # Format matching jobs
         complete_jobs = []
         for idx, job in enumerate(jobs):
             job_dict = dict(job)
@@ -1018,7 +1064,6 @@ async def search_jobs(request: Request, token: str = Depends(verify_token)):
             
             complete_jobs.append(complete_job)
         
-        # Build response message
         filters_applied = []
         if user_query:
             filters_applied.append(f"query '{user_query}'")
@@ -1057,13 +1102,11 @@ async def analyze_cv_job_match_hybrid_endpoint(
     jobTitle: str = Form(...),
     company: str = Form(...),
     jobDescription: str = Form(...),
-    token: str = Depends(verify_token)
+    session: str = Depends(verify_session)
 ):
     try:
-        # Validate file size
         validate_file_size(file)
         
-        # Extract CV text
         if file.filename.endswith(".pdf"):
             original_cv_content = extract_text_from_pdf(file.file)
         elif file.filename.endswith(".docx"):
@@ -1080,20 +1123,14 @@ async def analyze_cv_job_match_hybrid_endpoint(
                 content={"error": "Could not extract text from the uploaded file."}
             )
 
-        # PRIVACY PROTECTION: Remove personal information
         cleaned_cv_content = remove_personal_info_from_cv(original_cv_content)
-        
-        # MONITORING: Log and validate privacy protection
         privacy_validation = log_privacy_protection(original_cv_content, cleaned_cv_content, "cv-job-match")
         
-        # Alert if privacy protection failed
         if not privacy_validation["privacy_check_passed"]:
             logger.error(f"PRIVACY BREACH DETECTED in job match: {privacy_validation['issues_found']}")
 
-        # STEP 1: Calculate algorithmic match scores using cleaned content
         match_data = calculate_cv_job_match_hybrid(cleaned_cv_content, jobDescription, jobTitle)
         
-        # STEP 2: Generate AI response using cleaned content
         ai_prompt = f"""
         Create a CV match analysis in this EXACT format:
 
@@ -1138,8 +1175,6 @@ async def analyze_cv_job_match_hybrid_endpoint(
         ]
 
         ai_response = get_ai_response(messages, max_tokens=600)
-
-        # Get ranking based on match score
         ranking = get_match_ranking(match_data['overall_match'])
 
         return JSONResponse({
@@ -1172,11 +1207,8 @@ async def analyze_cv_job_match_hybrid_endpoint(
             content={"error": "Failed to analyze CV match. Please try again."}
         )
 
-# ASSESSMENT ENDPOINTS
-
 @app.get("/assessment-questions")
-async def get_assessment_questions(token: str = Depends(verify_token)):
-    """Get assessment questions and instructions"""
+async def get_assessment_questions(session: str = Depends(verify_session)):
     try:
         instructions = get_assessment_instructions()
         
@@ -1202,11 +1234,9 @@ async def get_assessment_questions(token: str = Depends(verify_token)):
 @app.post("/momfit-assessment")
 async def submit_momfit_assessment(
     responses: AssessmentResponse,
-    token: str = Depends(verify_token)
+    session: str = Depends(verify_session)
 ):
-    """Submit MomFit assessment responses and get personalized feedback"""
     try:
-        # Validate responses using the correct validation function
         is_valid, error_message = validate_responses(responses.dict())
         if not is_valid:
             return JSONResponse(
@@ -1214,10 +1244,7 @@ async def submit_momfit_assessment(
                 content={"error": "Invalid responses", "details": error_message}
             )
         
-        # Calculate scores
         scores = calculate_assessment_scores(responses.dict())
-        
-        # Generate personalized feedback
         feedback = generate_assessment_feedback(scores)
         
         return JSONResponse({
@@ -1245,8 +1272,7 @@ async def submit_momfit_assessment(
         )
 
 @app.get("/assessment-stats")
-async def get_assessment_stats(token: str = Depends(verify_token)):
-    """Get assessment statistics and metadata"""
+async def get_assessment_stats(session: str = Depends(verify_session)):
     try:
         return JSONResponse({
             "assessment_info": {
@@ -1288,9 +1314,7 @@ async def get_assessment_stats(token: str = Depends(verify_token)):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with privacy protection and labour law status"""
     try:
-        # Test OpenAI connection
         test_response = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Test"}],
@@ -1301,13 +1325,11 @@ async def health_check():
         openai_status = "Error"
     
     try:
-        # Test job data
         jobs = get_all_jobs()
         job_data_status = f"{len(jobs)} jobs loaded"
     except Exception:
         job_data_status = "Job data error"
     
-    # Test privacy protection
     try:
         test_cv = "John Doe john@email.com (555) 123-4567 Professional Summary: Software developer"
         cleaned = remove_personal_info_from_cv(test_cv)
@@ -1315,7 +1337,6 @@ async def health_check():
     except Exception:
         privacy_status = "Error"
     
-    # Test labour law RAG with Google Drive info
     try:
         rag = get_rag_instance()
         stats = rag.get_system_stats()
@@ -1343,8 +1364,10 @@ async def health_check():
             "job_data": job_data_status,
             "assessment": "Available",
             "privacy_protection": privacy_status,
-            "labour_law_rag": labour_law_status
+            "labour_law_rag": labour_law_status,
+            "session_management": "Active"
         },
+        "session_stats": session_store.get_stats(),
         "google_drive": gdrive_info,
         "version": "1.0.0",
         "file_limits": {
@@ -1356,7 +1379,6 @@ async def health_check():
     
 @app.get("/api-info")
 async def get_api_info():
-    """Get API information and capabilities"""
     return JSONResponse({
         "name": "Motherboard Career Assistant API",
         "version": "1.0.0",
@@ -1367,7 +1389,8 @@ async def get_api_info():
             "Privacy-Protected CV-Job Match Analysis",
             "MomFit Career Assessment",
             "Job Search and Matching",
-            "Personalized Career Guidance"
+            "Personalized Career Guidance",
+            "Session-based Security"
         ],
         "privacy_features": [
             "Automatic personal information removal",
@@ -1375,12 +1398,18 @@ async def get_api_info():
             "Professional content preservation",
             "Comprehensive logging"
         ],
+        "security_features": [
+            "Session-based authentication",
+            "2-hour session expiry",
+            "Automatic session cleanup",
+            "No exposed API tokens"
+        ],
         "supported_file_types": ["PDF", "DOCX"],
         "file_limits": {
             "max_size": "5MB",
             "timeout": "30 seconds"
         },
-        "authentication": "Bearer Token Required",
+        "authentication": "Session Token Required (from /create-session)",
         "rate_limits": {
             "general": "100 requests per hour",
             "file_uploads": "20 uploads per hour"
@@ -1392,8 +1421,7 @@ async def get_api_info():
     })
 
 @app.post("/feedback")
-async def submit_feedback(request: Request, token: str = Depends(verify_token)):
-    """Submit user feedback about the service"""
+async def submit_feedback(request: Request, session: str = Depends(verify_session)):
     try:
         data = await request.json()
         
@@ -1402,7 +1430,6 @@ async def submit_feedback(request: Request, token: str = Depends(verify_token)):
         feature = data.get("feature", "general")
         user_id = data.get("user_id", "anonymous")
         
-        # Log feedback (in production, you'd save to database)
         logger.info(f"Feedback received - Rating: {rating}, Feature: {feature}, User: {user_id}")
         logger.info(f"Comment: {comment}")
         
@@ -1419,11 +1446,8 @@ async def submit_feedback(request: Request, token: str = Depends(verify_token)):
             content={"error": "Failed to submit feedback"}
         )
 
-# Error handlers
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions"""
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -1445,11 +1469,11 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
     )
 
-# Startup message
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Motherboard Career Assistant API...")
     logger.info("Privacy Protection: ENABLED")
+    logger.info("Session Management: ENABLED")
     logger.info("Serving mothers in Ghana, Nigeria, Kenya and beyond")
     logger.info("Features: CV Analysis, Job Search, MomFit Assessment")
     uvicorn.run(app, host="0.0.0.0", port=8000)
