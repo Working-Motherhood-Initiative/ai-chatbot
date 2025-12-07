@@ -1222,4 +1222,4 @@ if __name__ == "__main__":
     logger.info("Features: Career Guidance + Payment Management")
     logger.info("Privacy Protection: ENABLED")
     logger.info("Session Management: ENABLED")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) 

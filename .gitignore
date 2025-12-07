@@ -25,12 +25,6 @@ venv/
 # Local development
 .DS_Store
 
-# HTML files
-aibot.html
-aibot2.html
+vectorstore/
+*.pkl
 
-# Data files
-jobs.csv
-
-# Python config
-pyenv.cfg
