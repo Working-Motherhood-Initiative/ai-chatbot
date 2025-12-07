@@ -4,25 +4,31 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import os
 import asyncio
-import threading
-import secrets
-import openai
-from dotenv import load_dotenv
-import pdfminer.high_level
-from docx import Document
-from job_fetcher import find_jobs_from_sentence, preload_job_embeddings, get_all_jobs
-from labour_law_rag import get_rag_instance, initialize_rag_system
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime
+from typing import Optional
+import httpx
 import json
-from typing import Optional, Dict, List, Tuple , Any, Set
-import re
-import base64
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
-from collections import Counter
-from pydantic import BaseModel
+import hmac
+import hashlib
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer, text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+
+# Career API imports
+from schemas import LabourLawQuery, AssessmentResponse
+from session_manager import SessionStore
+from privacy_protection import remove_personal_info_from_cv, log_privacy_protection
+from cv_analyzer import calculate_cv_job_match_hybrid, get_match_ranking
+from file_utils import extract_text_from_pdf, extract_text_from_docx, validate_file_size
+from llm_utils import get_ai_response
+from config import (
+    setup_logging, load_environment, initialize_openai_client, 
+    cleanup_sessions_periodically, test_privacy_protection, 
+    start_background_initialization, _initialization_complete, _initialization_error
+)
+from job_fetcher import find_jobs_from_sentence, get_all_jobs
+from labour_law_rag import get_rag_instance
 from assessment_questions import (
     ASSESSMENT_QUESTIONS,
     calculate_assessment_scores,
@@ -32,69 +38,127 @@ from assessment_questions import (
 )
 
 
-class LabourLawQuery(BaseModel):
-    query: str
-    country: Optional[str] = None
-    user_context: Optional[str] = None
-    chat_history: Optional[List[Dict[str, str]]] = None
+load_dotenv = __import__('dotenv').load_dotenv
+load_dotenv()
 
-class AssessmentResponse(BaseModel):
-    career_readiness: Dict[str, str]
-    work_life_balance: Dict[str, str]
+# Setup logging
+logger = setup_logging()
 
-class SessionStore:
-    def __init__(self):
-        self.sessions: Dict[str, dict] = {}
-        
-    def create_session(self) -> str:
-        session_id = secrets.token_urlsafe(32)
-        self.sessions[session_id] = {
-            "created": datetime.now(),
-            "expires": datetime.now() + timedelta(hours=2),
-            "requests": 0
-        }
-        logger.info(f"Created new session: {session_id[:8]}...")
-        return session_id
-    
-    def validate_session(self, session_id: str) -> bool:
-        if session_id not in self.sessions:
-            return False
-        
-        session = self.sessions[session_id]
-        if session["expires"] < datetime.now():
-            del self.sessions[session_id]
-            return False
-        
-        session["requests"] += 1
-        return True
-    
-    def cleanup_expired(self):
-        now = datetime.now()
-        expired = [sid for sid, data in self.sessions.items() 
-                  if data["expires"] < now]
-        for sid in expired:
-            del self.sessions[sid]
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired sessions")
-    
-    def get_stats(self):
-        return {
-            "active_sessions": len(self.sessions),
-            "total_sessions": len(self.sessions)
-        }
-
+# Initialize session store
 session_store = SessionStore()
 
-async def cleanup_sessions_periodically():
-    while True:
-        await asyncio.sleep(300)  # Every 5 minutes
-        session_store.cleanup_expired()
-        logger.info(f"Session stats: {session_store.get_stats()}")
-
+# Setup security
 security = HTTPBearer()
-API_TOKEN = os.getenv("API_TOKEN")
-if not API_TOKEN:
-    raise Exception("API_TOKEN not found in environment variables")
+API_TOKEN = load_environment()
+
+# Initialize OpenAI client
+openai_client = initialize_openai_client()
+
+# ==================== DATABASE SETUP ====================
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable not set")
+
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+elif not DATABASE_URL.startswith("postgresql+psycopg://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# ==================== DATABASE MODELS ====================
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    first_name = Column(String)
+    last_name = Column(String)
+    paystack_customer_code = Column(String)
+    paystack_customer_id = Column(Integer)
+    authorization_code = Column(String, nullable=True)
+    email_token = Column(String, nullable=True)           
+    first_authorization = Column(Boolean, default=False)
+    subscription_active = Column(Boolean, default=False)
+    subscription_code = Column(String, nullable=True)
+    last_payment_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, index=True)
+    subscription_code = Column(String, unique=True, index=True)
+    plan_id = Column(String)
+    status = Column(String)
+    email_token = Column(String, nullable=True)          
+    next_payment_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class PaymentLog(Base):
+    __tablename__ = "payment_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, index=True)
+    reference = Column(String, unique=True, index=True)
+    amount = Column(Integer)
+    status = Column(String)
+    event_type = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    metadata_json = Column(String, nullable=True)
+
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+app = FastAPI(
+    title="Motherboard Career Assistant API", 
+    version="2.0.0",
+    description="Complete API for Motherboard - Career Guidance + Payment Management"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://dragonfly-chihuahua-alhg.squarespace.com",
+        "https://ai-chatbot-4bqx.onrender.com",
+        "localhost",
+        "127.0.0.1",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
+PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
+PAYSTACK_BASE_URL = "https://api.paystack.co"
+
+paystack_headers = {
+    "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+    "Content-Type": "application/json"
+}
+
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_TOKEN:
@@ -104,6 +168,7 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
             detail="Invalid authentication token"
         )
     return credentials.credentials
+
 
 async def verify_session(
     authorization: Optional[str] = Header(None)
@@ -124,508 +189,43 @@ async def verify_session(
     
     return session_id
 
-log_level = os.getenv("LOG_LEVEL", "INFO")
-logging.basicConfig(level=getattr(logging, log_level))
-logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Motherboard Career Assistant API", 
-    version="1.0.0",
-    description="API for the Motherboard Career Assistant - helping mothers navigate work and career"
-)
+def validate_email(email: str) -> str:
+    if not email or '@' not in email or '.' not in email:
+        raise ValueError('Invalid email format')
+    return email.lower().strip()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://dragonfly-chihuahua-alhg.squarespace.com",
-        "https://ai-chatbot-4bqx.onrender.com",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-load_dotenv()
-
-try:
-    openai_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-except Exception as e:
-    logger.error(f"Failed to initialize OpenAI client: {e}")
-    raise
-
-_initialization_complete = False
-_initialization_error = None
-
-
-def remove_personal_info_from_cv(cv_text: str) -> str:
-    try:
-        if not cv_text or not cv_text.strip():
-            logger.warning("Empty CV text provided for privacy protection")
-            return ""
-            
-        cleaned_text = cv_text
-        
-        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        cleaned_text = re.sub(email_pattern, '[EMAIL REMOVED]', cleaned_text)
-        
-        phone_patterns = [
-            r'\+?\d{1,4}[\s\-\(\)]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}',
-            r'\b\d{3}[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b',
-            r'\+\d{1,3}\s?\d{1,4}\s?\d{1,4}\s?\d{1,9}',
-            r'\(\d{3}\)\s?\d{3}[\s\-]?\d{4}',
-        ]
-        
-        for pattern in phone_patterns:
-            cleaned_text = re.sub(pattern, '[PHONE REMOVED]', cleaned_text)
-        
-        address_patterns = [
-            r'\b\d+\s+[A-Za-z\s]+(Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Way|Place|Pl)\b.*',
-            r'\b\d+[A-Za-z]?\s+[A-Za-z\s]+\d{5}(-\d{4})?\b',
-            r'\b[A-Za-z\s]+,\s*[A-Za-z\s]+\s*\d{5}(-\d{4})?\b',
-        ]
-        
-        for pattern in address_patterns:
-            cleaned_text = re.sub(pattern, '[ADDRESS REMOVED]', cleaned_text, flags=re.IGNORECASE)
-        
-        # 4. Remove potential names from the beginning of CV
-        header_section = cleaned_text[:500]
-        main_section = cleaned_text[500:]
-        
-        lines = header_section.split('\n')
-        filtered_header_lines = []
-        
-        for i, line in enumerate(lines):
-            line = line.strip()
-            
-            if len(line) < 3:
-                filtered_header_lines.append(line)
-                continue
-                
-            words = line.split()
-            
-            if (2 <= len(words) <= 4 and 
-                all(word.replace('.', '').replace(',', '').isalpha() for word in words) and
-                any(word[0].isupper() for word in words if len(word) > 0) and
-                i < 5):
-                continue
-            
-            career_keywords = ['objective', 'summary', 'profile', 'experience', 'education', 
-                              'skills', 'qualifications', 'employment', 'work', 'career',
-                              'professional', 'expertise', 'background', 'achievements']
-            
-            if any(keyword in line.lower() for keyword in career_keywords):
-                filtered_header_lines.append(line)
-            elif len(words) > 4:
-                filtered_header_lines.append(line)
-            else:
-                filtered_header_lines.append(line)
-        
-        cleaned_header = '\n'.join(filtered_header_lines)
-        cleaned_text = cleaned_header + '\n' + main_section
-        
-        # 5. Remove social security numbers
-        ssn_pattern = r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b'
-        cleaned_text = re.sub(ssn_pattern, '[ID REMOVED]', cleaned_text)
-        
-        # 6. Remove LinkedIn URLs
-        linkedin_pattern = r'https?://(?:www\.)?linkedin\.com/in/[^\s]+'
-        cleaned_text = re.sub(linkedin_pattern, '[LINKEDIN PROFILE]', cleaned_text)
-        
-        # 7. Remove other social media URLs
-        social_patterns = [
-            r'https?://(?:www\.)?(?:twitter|facebook|instagram|github)\.com/[^\s]+',
-            r'https?://[^\s]*(?:twitter|facebook|instagram)\.com[^\s]*'
-        ]
-        
-        for pattern in social_patterns:
-            cleaned_text = re.sub(pattern, '[SOCIAL MEDIA PROFILE]', cleaned_text)
-        
-        # 8. Remove dates of birth
-        dob_patterns = [
-            r'\b(?:DOB|Date of Birth|Born):?\s*\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b',
-            r'\b(?:DOB|Date of Birth|Born):?\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b'
-        ]
-        
-        for pattern in dob_patterns:
-            cleaned_text = re.sub(pattern, '[DATE OF BIRTH REMOVED]', cleaned_text, flags=re.IGNORECASE)
-        
-        # 9. Clean up extra whitespace
-        cleaned_text = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_text)
-        cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text)
-        
-        # 10. Add privacy notice
-        privacy_notice = "=== PRIVACY-PROTECTED CV ANALYSIS ===\n[Personal identifying information has been removed for privacy protection]\n\n"
-        cleaned_text = privacy_notice + cleaned_text.strip()
-        
-        return cleaned_text
-        
-    except Exception as e:
-        logger.error(f"Privacy protection failed: {e}")
-        raise HTTPException(status_code=500, detail="Privacy protection system failed")
-
-
-def validate_privacy_protection(original_text: str, cleaned_text: str) -> Dict:
-    validation_results = {
-        "timestamp": datetime.now().isoformat(),
-        "privacy_check_passed": True,
-        "issues_found": [],
-        "statistics": {}
-    }
-    
-    try:
-        emails_in_original = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', original_text)
-        emails_in_cleaned = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', cleaned_text)
-        
-        if emails_in_cleaned:
-            validation_results["privacy_check_passed"] = False
-            validation_results["issues_found"].append(f"EMAIL LEAK: {len(emails_in_cleaned)} email(s) still present")
-        
-        phone_patterns = [
-            r'\+?\d{1,4}[\s\-\(\)]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}',
-            r'\b\d{3}[\s\-\.]?\d{3}[\s\-\.]?\d{4}\b',
-            r'\(\d{3}\)\s?\d{3}[\s\-]?\d{4}'
-        ]
-        
-        phones_in_cleaned = []
-        for pattern in phone_patterns:
-            phones_in_cleaned.extend(re.findall(pattern, cleaned_text))
-        
-        phones_in_cleaned_filtered = [p for p in phones_in_cleaned if not re.match(r'^(19|20)\d{2}$', p.replace('-', '').replace(' ', '').replace('(', '').replace(')', ''))]
-        
-        if phones_in_cleaned_filtered:
-            validation_results["privacy_check_passed"] = False
-            validation_results["issues_found"].append(f"PHONE LEAK: {len(phones_in_cleaned_filtered)} phone(s) still present")
-        
-        validation_results["statistics"] = {
-            "original_length": len(original_text),
-            "cleaned_length": len(cleaned_text),
-            "reduction_percentage": round((len(original_text) - len(cleaned_text)) / len(original_text) * 100, 2) if len(original_text) > 0 else 0,
-            "total_issues_found": len(validation_results["issues_found"]),
-            "emails_removed": len(emails_in_original) - len(emails_in_cleaned),
-            "phones_removed": len([p for p in re.findall(r'\+?\d{1,4}[\s\-\(\)]?\(?\d{1,4}\)?[\s\-]?\d{1,4}[\s\-]?\d{1,9}', original_text)]) - len(phones_in_cleaned_filtered)
-        }
-        
-    except Exception as e:
-        logger.error(f"Privacy validation failed: {e}")
-        validation_results["privacy_check_passed"] = False
-        validation_results["issues_found"].append(f"VALIDATION ERROR: {str(e)}")
-    
-    return validation_results
-
-
-def log_privacy_protection(original_cv: str, cleaned_cv: str, endpoint: str):    
-    try:
-        validation = validate_privacy_protection(original_cv, cleaned_cv)
-        
-        logger.info(f"=== PRIVACY PROTECTION LOG - {endpoint} ===")
-        logger.info(f"Reduction: {validation['statistics']['reduction_percentage']}%")
-        logger.info(f"Issues Found: {validation['statistics']['total_issues_found']}")
-        
-        if validation["issues_found"]:
-            logger.warning(f"Privacy Issues Detected: {validation['issues_found']}")
-        else:
-            logger.info("Privacy protection successful - no issues found")
-        
-        logger.info(f"Emails removed: {validation['statistics']['emails_removed']}")
-        logger.info(f"Phones removed: {validation['statistics']['phones_removed']}")
-        
-        return validation
-        
-    except Exception as e:
-        logger.error(f"Privacy logging failed: {e}")
-        return {"privacy_check_passed": False, "statistics": {"reduction_percentage": 0}}
-
-
-# Utility functions
-def extract_text_from_pdf(file):
-    try:
-        return pdfminer.high_level.extract_text(file)
-    except Exception as e:
-        logger.error(f"Error extracting PDF text: {e}")
-        raise HTTPException(status_code=400, detail="Failed to extract text from PDF")
-
-def extract_text_from_docx(file):
-    try:
-        doc = Document(file)
-        return "\n".join([para.text for para in doc.paragraphs])
-    except Exception as e:
-        logger.error(f"Error extracting DOCX text: {e}")
-        raise HTTPException(status_code=400, detail="Failed to extract text from DOCX")
-
-def extract_skills_from_cv(cv_text: str) -> List[str]:
-    try:
-        cleaned_cv_text = remove_personal_info_from_cv(cv_text)
-        
-        messages = [
-            {
-                "role": "system", 
-                "content": "You are a skill extraction expert. Extract key skills, technologies, and competencies from the privacy-protected CV text. Return only a comma-separated list of skills, no explanations."
-            },
-            {
-                "role": "user", 
-                "content": f"Extract skills from this privacy-protected CV:\n{cleaned_cv_text[:2000]}"
-            }
-        ]
-        
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=200
-        )
-        
-        skills_text = response.choices[0].message.content.strip()
-        skills = [skill.strip() for skill in skills_text.split(',') if skill.strip()]
-        return skills[:10]
-        
-    except Exception as e:
-        logger.error(f"Error extracting skills: {e}")
-        return []
-
-def get_ai_response(messages: List[Dict], max_tokens: int = 500) -> str:
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=max_tokens
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI API error: {e}")
-        return "I'm sorry, I'm having trouble processing your request right now. Please try again later."
-
-def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title: str) -> Dict:
-    keyword_score = calculate_keyword_match(cv_text, job_description)
-    skills_score = calculate_skills_match(cv_text, job_description)
-    experience_score = calculate_experience_match(cv_text, job_description, job_title)
-    semantic_score = calculate_semantic_similarity(cv_text, job_description)
-    
-    total_score = (
-        keyword_score * 0.30 +
-        skills_score * 0.25 +
-        experience_score * 0.25 +
-        semantic_score * 0.20
-    )
-
-    missing_keywords = find_missing_keywords(cv_text, job_description)
-    strengths = identify_strengths(cv_text, job_description)
-    
-    return {
-        "overall_match": round(total_score),
-        "breakdown": {
-            "keyword_match": round(keyword_score),
-            "skills_match": round(skills_score), 
-            "experience_match": round(experience_score),
-            "semantic_similarity": round(semantic_score)
-        },
-        "missing_keywords": missing_keywords,
-        "strengths": strengths
-    }
-
-def get_match_ranking(overall_score: int) -> Dict[str, str]:
-    if overall_score >= 80:
-        return {
-            "level": "High",
-            "color": "#059669",
-            "description": "Excellent match - strongly recommended to apply"
-        }
-    elif overall_score >= 50:
-        return {
-            "level": "Medium", 
-            "color": "#f59e0b",
-            "description": "Good match - consider applying with CV improvements"
-        }
-    else:
-        return {
-            "level": "Low",
-            "color": "#ef4444",
-            "description": "Weak match - significant improvements needed"
-        }
-
-def calculate_keyword_match(cv_text: str, job_description: str) -> float:
-    job_keywords = extract_important_keywords(job_description)
-    
-    if not job_keywords:
-        return 50.0
-    
-    cv_lower = cv_text.lower()
-    matches = sum(1 for keyword in job_keywords if keyword.lower() in cv_lower)
-    
-    return (matches / len(job_keywords)) * 100
-
-def extract_important_keywords(text: str) -> List[str]:
-    tech_pattern = r'\b(python|javascript|java|react|angular|sql|html|css|git|aws|azure|docker|kubernetes|salesforce|hubspot|excel|powerpoint|google analytics|photoshop|illustrator|figma|canva)\b'
-    
-    soft_pattern = r'\b(leadership|management|communication|teamwork|problem[\-\s]solving|analytical|creative|organized|customer service|project management)\b'
-    
-    industry_pattern = r'\b(marketing|sales|finance|healthcare|education|technology|consulting|administration|operations|human resources)\b'
-    
-    keywords = []
-    for pattern in [tech_pattern, soft_pattern, industry_pattern]:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        keywords.extend(matches)
-    
-    capitalized = re.findall(r'\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*\b', text)
-    keywords.extend([cap for cap in capitalized if len(cap) > 2 and cap.isupper() == False])
-    
-    return list(set(keywords))
-
-def calculate_skills_match(cv_text: str, job_description: str) -> float:
-    common_skills = [
-        'leadership', 'management', 'communication', 'teamwork', 'problem solving',
-        'analytical', 'creative', 'organized', 'customer service', 'sales',
-        'marketing', 'project management', 'time management', 'multitasking',
-        'microsoft office', 'excel', 'powerpoint', 'google analytics',
-        'social media', 'content creation', 'data analysis'
-    ]
-    
-    cv_lower = cv_text.lower()
-    job_lower = job_description.lower()
-    
-    job_skills = [skill for skill in common_skills if skill in job_lower]
-    
-    if not job_skills:
-        return 60.0
-    
-    cv_matches = [skill for skill in job_skills if skill in cv_lower]
-    
-    return (len(cv_matches) / len(job_skills)) * 100
-
-def calculate_experience_match(cv_text: str, job_description: str, job_title: str) -> float:
-    years_pattern = r'(\d+)\+?\s*years?\s*(?:of\s*)?(?:experience|exp)'
-    job_years_match = re.search(years_pattern, job_description, re.IGNORECASE)
-    required_years = int(job_years_match.group(1)) if job_years_match else None
-    
-    cv_years = estimate_cv_experience_years(cv_text)
-    
-    if required_years and cv_years:
-        if cv_years >= required_years:
-            exp_score = 100
-        elif cv_years >= required_years * 0.8:
-            exp_score = 85
-        elif cv_years >= required_years * 0.6:
-            exp_score = 70
-        else:
-            exp_score = 50
-    else:
-        exp_score = 75
-    
-    title_words = job_title.lower().split()
-    cv_lower = cv_text.lower()
-    title_relevance = sum(20 for word in title_words if len(word) > 3 and word in cv_lower)
-    
-    return min(100, (exp_score + title_relevance) / 2)
-
-def estimate_cv_experience_years(cv_text: str) -> int:
-    date_ranges = re.findall(r'(20\d{2}|19\d{2})\s*[-–]\s*(20\d{2}|present|current)', cv_text, re.IGNORECASE)
-    
-    total_years = 0
-    for start_str, end_str in date_ranges:
-        start_year = int(start_str)
-        end_year = 2025 if end_str.lower() in ['present', 'current'] else int(end_str)
-        total_years += max(0, end_year - start_year)
-    
-    return total_years
-
-def calculate_semantic_similarity(cv_text: str, job_description: str) -> float:
-    try:
-        vectorizer = TfidfVectorizer(
-            stop_words='english',
-            max_features=500,
-            ngram_range=(1, 2)
-        )
-        
-        documents = [cv_text[:2000], job_description[:1000]]
-        tfidf_matrix = vectorizer.fit_transform(documents)
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        
-        return similarity * 100
-        
-    except Exception as e:
-        logger.warning(f"Semantic similarity calculation failed: {e}")
-        return 50.0
-
-def find_missing_keywords(cv_text: str, job_description: str) -> List[str]:
-    job_keywords = extract_important_keywords(job_description)
-    cv_lower = cv_text.lower()
-    
-    missing = [kw for kw in job_keywords if kw.lower() not in cv_lower]
-    return missing[:6]
-
-def identify_strengths(cv_text: str, job_description: str) -> List[str]:
-    job_keywords = extract_important_keywords(job_description)
-    cv_lower = cv_text.lower()
-    
-    strengths = [kw for kw in job_keywords if kw.lower() in cv_lower]
-    return strengths[:5]
-
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
-
-def validate_file_size(file: UploadFile):
-    if hasattr(file, 'size') and file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large. Maximum size is 5MB.")
-
-def initialize_background():
-    global _initialization_complete, _initialization_error
-    try:
-        logger.info("Background initialization started...")
-        
-        logger.info("Starting job data initialization...")
-        preload_job_embeddings()
-        jobs = get_all_jobs()
-        logger.info(f"Successfully loaded {len(jobs)} jobs")
-        
-        logger.info("Initializing Labour Law RAG system...")
-        try:
-            doc_count = initialize_rag_system(
-                pdf_directory="labour_laws",
-                force_reload=False,
-                use_gdrive=True
-            )
-            logger.info(f"Successfully loaded {doc_count} labour law document chunks")
-            
-            rag = get_rag_instance()
-            stats = rag.get_system_stats()
-            logger.info(f"Google Drive enabled: {stats.get('gdrive_enabled', False)}")
-            logger.info(f"Local cache exists: {stats.get('local_cache_exists', False)}")
-            
-        except Exception as e:
-            logger.error(f"Labour Law RAG initialization failed: {e}")
-            logger.warning("Labour law queries will not be available until next restart")
-            _initialization_error = str(e)
-        
-        _initialization_complete = True
-        logger.info("Background initialization completed!")
-        
-    except Exception as e:
-        logger.error(f"Background initialization error: {e}")
-        _initialization_error = str(e)
-        _initialization_complete = True
 
 @app.on_event("startup")
 async def startup_event():
     try:
         # Test privacy protection
-        test_text = "John Doe john@email.com (555) 123-4567 Professional Summary: Software developer"
-        cleaned = remove_personal_info_from_cv(test_text)
-        if "john@email.com" in cleaned:
-            raise Exception("Privacy protection system failed startup test")
-        logger.info("Privacy protection startup test passed")
-        
+        test_privacy_protection(remove_personal_info_from_cv)
         logger.info("API server starting...")
         logger.info("Session management initialized")
         
         # Start session cleanup
-        asyncio.create_task(cleanup_sessions_periodically())
+        asyncio.create_task(cleanup_sessions_periodically(session_store))
         
         logger.info("Running heavy initialization in background thread...")
-        init_thread = threading.Thread(target=initialize_background, daemon=True)
-        init_thread.start()
+        start_background_initialization()
         
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
+
+
+@app.get("/")
+async def root():
+    return {"message": "Motherboard Career Assistant API", "version": "2.0.0", "status": "running"}
+
+@app.get("/health")
+async def health_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected", "version": "2.0.0"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
 @app.get("/init-status")
 async def initialization_status():
@@ -633,37 +233,12 @@ async def initialization_status():
         "initialization_complete": _initialization_complete,
         "error": _initialization_error,
         "timestamp": datetime.now().isoformat()
-    })   
+    })
 
-@app.post("/admin/reload-vectorstore")
-async def admin_reload_vectorstore(token: str = Depends(verify_token)):
-    """Admin endpoint - still uses API token"""
-    try:
-        logger.info("Admin: Manual vectorstore reload initiated...")
-        
-        rag = get_rag_instance()
-        doc_count = rag.reload_from_gdrive()
-        
-        return JSONResponse({
-            "status": "success",
-            "message": "Vector store reloaded successfully from Google Drive",
-            "document_chunks": doc_count,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        logger.error(f"Admin reload failed: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Failed to reload vector store", 
-                "details": str(e)
-            }
-        )
+# SESSION MANAGEMENT 
 
 @app.post("/create-session")
 async def create_session():
-    """Create a new session for the frontend - NO AUTH REQUIRED"""
     session_id = session_store.create_session()
     return {
         "session_id": session_id,
@@ -671,159 +246,480 @@ async def create_session():
         "message": "Session created successfully"
     }
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
+#PAYMENT API ENDPOINTS
+
+@app.post("/api/customers")
+async def create_customer(request: Request, db: Session = Depends(get_db)):
     try:
-        rag = get_rag_instance()
-        stats = rag.get_system_stats()
-        gdrive_status = "Enabled" if stats.get('gdrive_enabled') else "Disabled"
-        gdrive_class = "enabled" if stats.get('gdrive_enabled') else "disabled"
-    except:
-        gdrive_status = "Unknown"
-        gdrive_class = "disabled"
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Motherboard Career Assistant API</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }}
-            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            h1 {{ color: #667eea; }}
-            .endpoint {{ background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #667eea; }}
-            .method {{ color: #28a745; font-weight: bold; }}
-            .new-feature {{ background: linear-gradient(135deg, #f0f4ff 0%, #e8f2ff 100%); border-left: 4px solid #764ba2; }}
-            .privacy-feature {{ background: linear-gradient(135deg, #fff0f0 0%, #ffe8e8 100%); border-left: 4px solid #dc3545; }}
-            .session-feature {{ background: linear-gradient(135deg, #f0fff4 0%, #e8ffe8 100%); border-left: 4px solid #10b981; }}
-            .status-enabled {{ color: #28a745; font-weight: bold; }}
-            .status-disabled {{ color: #6c757d; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Motherboard Career Assistant API</h1>
-            <p>Welcome to the Motherboard Career Assistant API - helping mothers navigate work and career with <strong>privacy protection & session security!</strong></p>
-            
-            <h2>API Status</h2>
-            <p>Status: <span style="color: green;">Running with Privacy Protection & Session Management</span></p>
-            <p>Version: 1.0.0</p>
-            <p>Google Drive Integration: <span class="status-{gdrive_class}">{gdrive_status}</span></p>
-            <p>Session System: <span class="status-enabled">Active</span></p>
-            
-            <div class="session-feature">
-                <h3> Session Management Active</h3>
-                <p>New secure session system:</p>
-                <ul>
-                    <li>No exposed API tokens in frontend</li>
-                    <li>2-hour session expiry with auto-refresh</li>
-                    <li>In-memory session storage (fast & free)</li>
-                    <li>Automatic cleanup of expired sessions</li>
-                </ul>
-            </div>
-            
-            <div class="privacy-feature">
-                <h3>Privacy Protection Active</h3>
-                <p>All CV uploads are now processed with comprehensive privacy protection:</p>
-                <ul>
-                    <li>Personal information removed before AI analysis</li>
-                    <li>Names, emails, phone numbers, addresses protected</li>
-                    <li>Professional content preserved for quality analysis</li>
-                    <li>Real-time privacy monitoring and validation</li>
-                </ul>
-            </div>
-            
-            <div class="new-feature">
-                <h3>Google Drive Integration</h3>
-                <p>Labour law vectorstore now loads from Google Drive for faster startup:</p>
-                <ul>
-                    <li>Ultra-fast initialization (seconds vs minutes)</li>
-                    <li>No need for local PDF processing</li>
-                    <li>Easy updates - just replace file in Google Drive</li>
-                    <li>Automatic local caching for offline resilience</li>
-                </ul>
-            </div>
-            
-            <h2>Available Endpoints</h2>
-            
-            <div class="endpoint session-feature">
-                <span class="method">POST</span> <code>/create-session</code>
-                <p>Create a new session (public, no auth) - Sessions last 2 hours</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/welcome</code>
-                <p>Welcome and onboard new users (requires session)</p>
-            </div>
-            
-            <div class="endpoint privacy-feature">
-                <span class="method">POST</span> <code>/cv-tips</code>
-                <p>Upload CV file for personalized feedback (Privacy Protected, requires session)</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">POST</span> <code>/search-jobs</code>
-                <p>Search for jobs based on user query (requires session)</p>
-            </div>
-            
-            <div class="endpoint privacy-feature">
-                <span class="method">POST</span> <code>/cv-job-match</code>
-                <p>Analyze CV match against specific job posting (Privacy Protected, requires session)</p>
-            </div>
-            
-            <div class="endpoint new-feature">
-                <span class="method">GET</span> <code>/assessment-questions</code>
-                <p>Get MomFit assessment questions and instructions (requires session)</p>
-            </div>
-            
-            <div class="endpoint new-feature">
-                <span class="method">POST</span> <code>/momfit-assessment</code>
-                <p>Submit MomFit assessment responses and get personalized feedback (requires session)</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/assessment-stats</code>
-                <p>Get assessment statistics and metadata (requires session)</p>
-            </div>
+        data = await request.json()
+        email = data.get('email', '').strip()
+        first_name = data.get('first_name', '').strip()
+        last_name = data.get('last_name', '').strip()
 
-            <div class="endpoint new-feature">
-                <span class="method">POST</span> <code>/labour-law-query</code>
-                <p>Ask questions about labour laws across 16 African countries (RAG-powered, requires session)</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/labour-law-countries</code>
-                <p>Get list of supported countries for labour law queries (requires session)</p>
-            </div>
-            
-            <div class="endpoint new-feature">
-                <span class="method">POST</span> <code>/admin/reload-vectorstore</code>
-                <p>Manually reload vectorstore from Google Drive (Admin only - requires API token)</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/health</code>
-                <p>Health check endpoint with privacy status and Google Drive info (no auth)</p>
-            </div>
-            
-            <div class="endpoint">
-                <span class="method">GET</span> <code>/docs</code>
-                <p>Interactive API documentation (Swagger UI)</p>
-            </div>
-            
-            <h2>Authentication</h2>
-            <p><strong>Public Endpoints:</strong> /create-session, /health, /docs (no auth needed)</p>
-            <p><strong>User Endpoints:</strong> Most endpoints require a session token from /create-session</p>
-            <p><strong>Admin Endpoints:</strong> /admin/* require API token: <code>Authorization: Bearer API_TOKEN</code></p>
-            
-            <h2>Documentation</h2>
-            <p>Visit <a href="/docs">/docs</a> for interactive API documentation</p>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content, status_code=200)
+        if not email or not first_name or not last_name:
+            raise HTTPException(status_code=400, detail="email, first_name, and last_name are required")
 
+        validate_email(email)
+
+        existing_user = db.query(User).filter(User.email == email).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Customer already exists")
+
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name
+            }
+
+            response = await client.post(
+                f"{PAYSTACK_BASE_URL}/customer",
+                json=payload,
+                headers=paystack_headers,
+                timeout=30.0
+            )
+
+            if response.status_code not in (200, 201):
+                try:
+                    err = response.json()
+                except Exception:
+                    err = response.text
+                raise HTTPException(status_code=400, detail=f"Failed to create customer on Paystack: {err}")
+
+            paystack_customer = response.json().get("data")
+
+            db_user = User(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                paystack_customer_code=paystack_customer.get("customer_code"),
+                paystack_customer_id=paystack_customer.get("id"),
+                subscription_active=False
+            )
+            db.add(db_user)
+            db.commit()
+            db.refresh(db_user)
+
+            return {
+                "status": "success",
+                "message": "Customer created successfully",
+                "data": {
+                    "email": email,
+                    "customer_code": paystack_customer.get("customer_code")
+                }
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/initialize-payment")
+async def initialize_payment(request: Request, db: Session = Depends(get_db)):
+    try:
+        data = await request.json()
+        email = data.get('email', '').strip()
+
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Customer not found. Create customer first.")
+
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "email": email,
+                "amount": 8000,
+                "channels": ["card", "bank", "ussd", "qr", "mobile_money"],
+                "metadata": {
+                    "plan_name": "Motherboard Monthly Plan",
+                    "subscription_type": "monthly"
+                }
+            }
+
+            response = await client.post(
+                f"{PAYSTACK_BASE_URL}/transaction/initialize",
+                json=payload,
+                headers=paystack_headers,
+                timeout=30.0
+            )
+
+            if response.status_code not in (200, 201):
+                raise HTTPException(status_code=400, detail="Failed to initialize payment")
+
+            transaction_data = response.json().get("data")
+
+            return {
+                "status": "success",
+                "message": "Payment initialized",
+                "data": {
+                    "authorization_url": transaction_data.get("authorization_url"),
+                    "access_code": transaction_data.get("access_code"),
+                    "reference": transaction_data.get("reference")
+                }
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/api/verify-payment")
+async def verify_payment(request: Request, db: Session = Depends(get_db)):
+    try:
+        data = await request.json()
+        reference = data.get('reference', '').strip()
+
+        if not reference:
+            raise HTTPException(status_code=400, detail="reference is required")
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+                headers=paystack_headers,
+                timeout=30.0
+            )
+
+            if response.status_code not in (200, 201):
+                raise HTTPException(status_code=400, detail="Failed to verify payment")
+
+            transaction = response.json().get("data")
+
+            if transaction.get("status") != "success":
+                return {
+                    "status": "failed",
+                    "message": "Payment was not successful"
+                }
+
+            customer_email = transaction["customer"]["email"]
+            authorization_data = transaction.get("authorization") or {}
+            amount = transaction.get("amount")
+
+            user = db.query(User).filter(User.email == customer_email).first()
+            if user:
+                auth_code = authorization_data.get("authorization_code")
+                if auth_code:
+                    user.authorization_code = auth_code
+                    user.first_authorization = True
+                    user.updated_at = datetime.utcnow()
+                    db.commit()
+
+            payment_log = PaymentLog(
+                email=customer_email,
+                reference=reference,
+                amount=amount,
+                status="success",
+                event_type="initial_payment",
+                metadata_json=json.dumps(authorization_data)
+            )
+            db.add(payment_log)
+            db.commit()
+
+            return {
+                "status": "success",
+                "message": "Payment verified!",
+                "data": {
+                    "email": customer_email,
+                    "amount": amount / 100 if amount else None,
+                    "reference": reference
+                }
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/api/create-subscription")
+async def create_subscription(request: Request, db: Session = Depends(get_db)):
+    try:
+        data = await request.json()
+        email = data.get('email', '').strip()
+
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        if not user.authorization_code:
+            raise HTTPException(status_code=400, detail="Customer must complete initial payment first")
+
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "customer": user.paystack_customer_code,
+                "plan": "PLN_u6si72zqqto8dq0",
+                "authorization": user.authorization_code,
+                "start_date": datetime.utcnow().isoformat()
+            }
+
+            response = await client.post(
+                f"{PAYSTACK_BASE_URL}/subscription",
+                json=payload,
+                headers=paystack_headers,
+                timeout=30.0
+            )
+
+            if response.status_code not in (200, 201):
+                try:
+                    error_msg = response.json().get("message", "Failed to create subscription")
+                except Exception:
+                    error_msg = response.text or "Failed to create subscription"
+                raise HTTPException(status_code=400, detail=error_msg)
+
+            body = response.json()
+            if not body.get("status"):
+                raise HTTPException(status_code=400, detail=body.get("message", "Paystack error"))
+
+            subscription_data = body.get("data") or {}
+
+            db_subscription = Subscription(
+                email=email,
+                subscription_code=subscription_data.get("subscription_code"),
+                plan_id=subscription_data.get("plan"),
+                status=subscription_data.get("status"),
+                next_payment_date=subscription_data.get("next_payment_date"),
+                email_token=subscription_data.get("email_token")
+            )
+            db.add(db_subscription)
+
+            user.subscription_active = True
+            user.subscription_code = subscription_data.get("subscription_code")
+            if subscription_data.get("email_token"):
+                user.email_token = subscription_data.get("email_token")
+            user.updated_at = datetime.utcnow()
+
+            db.commit()
+
+            return {
+                "status": "success",
+                "message": "Subscription created successfully!",
+                "data": {
+                    "email": email,
+                    "subscription_code": subscription_data.get("subscription_code"),
+                    "status": subscription_data.get("status"),
+                    "next_payment_date": subscription_data.get("next_payment_date")
+                }
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.get("/api/subscription-status/{email}")
+async def check_subscription_status(email: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == email.lower()).first()
+
+    if not user:
+        return {
+            "status": "not_found",
+            "subscription_active": False
+        }
+
+    return {
+        "status": "found",
+        "subscription_active": user.subscription_active,
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "subscription_code": user.subscription_code,
+        "email_token": user.email_token,
+        "created_at": user.created_at.isoformat() if user.created_at else None
+    }
+
+@app.post("/api/cancel-subscription/{email}")
+async def cancel_subscription(email: str, db: Session = Depends(get_db)):
+    try:
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+
+        user = db.query(User).filter(User.email == email.lower()).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+        if not user.subscription_code:
+            raise HTTPException(status_code=400, detail="No active subscription found")
+
+        token = user.email_token
+        if not token:
+            sub = db.query(Subscription).filter(Subscription.subscription_code == user.subscription_code).first()
+            if sub:
+                token = sub.email_token
+
+        if not token:
+            raise HTTPException(status_code=400, detail="Missing email_token")
+
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "code": user.subscription_code,
+                "token": token
+            }
+
+            response = await client.post(
+                f"{PAYSTACK_BASE_URL}/subscription/disable",
+                json=payload,
+                headers=paystack_headers,
+                timeout=30.0
+            )
+
+            if response.status_code not in (200, 201):
+                try:
+                    err = response.json()
+                except Exception:
+                    err = response.text
+                raise HTTPException(status_code=400, detail=f"Failed: {err}")
+
+            body = response.json()
+            if not body.get("status"):
+                raise HTTPException(status_code=400, detail=body.get("message", "Error"))
+
+        user.subscription_active = False
+        user.updated_at = datetime.utcnow()
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": "Subscription cancelled successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+@app.post("/api/webhooks/paystack")
+async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
+    try:
+        raw_body = await request.body()
+        payload = json.loads(raw_body)
+
+        signature = request.headers.get("X-Paystack-Signature")
+        if not signature:
+            return {"status": "error", "message": "Missing signature"}
+
+        computed = hmac.new(
+            PAYSTACK_SECRET_KEY.encode(),
+            raw_body,
+            hashlib.sha512
+        ).hexdigest()
+
+        if signature != computed:
+            return {"status": "error", "message": "Invalid signature"}
+
+        event = payload.get("event")
+        data = payload.get("data") or {}
+
+        if event == "charge.success":
+            customer_email = None
+            if isinstance(data.get("customer"), dict):
+                customer_email = data["customer"].get("email")
+
+            if not customer_email:
+                return {"status": "ok"}
+
+            user = db.query(User).filter(User.email == customer_email).first()
+            if user:
+                authorization = data.get("authorization") or {}
+                if authorization.get("authorization_code"):
+                    user.authorization_code = authorization.get("authorization_code")
+                    user.first_authorization = True
+                user.subscription_active = True
+                user.last_payment_date = datetime.utcnow()
+                user.updated_at = datetime.utcnow()
+                db.commit()
+
+            payment_log = PaymentLog(
+                email=customer_email,
+                reference=data.get("reference"),
+                amount=data.get("amount"),
+                status="success",
+                event_type="charge.success",
+                metadata_json=json.dumps(data)
+            )
+            db.add(payment_log)
+            db.commit()
+
+        elif event == "subscription.disable" or event == "subscription.not_renew":
+            customer_email = None
+            if isinstance(data.get("customer"), dict):
+                customer_email = data["customer"].get("email")
+
+            if customer_email:
+                user = db.query(User).filter(User.email == customer_email).first()
+                if user:
+                    user.subscription_active = False
+                    user.updated_at = datetime.utcnow()
+                    db.commit()
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        logger.error(f"Webhook error: {str(e)}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/admin/customers")
+async def get_all_customers(db: Session = Depends(get_db)):
+    users = db.query(User).all()
+
+    customers = [
+        {
+            "email": user.email,
+            "name": f"{user.first_name} {user.last_name}",
+            "subscription_active": user.subscription_active,
+            "subscription_code": user.subscription_code,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+        for user in users
+    ]
+
+    return {
+        "total_customers": len(customers),
+        "customers": customers
+    }
+
+# CAREER API ENDPOINTS 
+
+@app.get("/api-info")
+async def api_info():
+    return JSONResponse({
+        "api_name": "Motherboard Career Assistant API",
+        "version": "2.0.0",
+        "status": "running",
+        "endpoints": {
+            "career": [
+                "POST /create-session",
+                "POST /welcome",
+                "GET /jobs",
+                "POST /search-jobs",
+                "POST /cv-job-match",
+                "GET /assessment-questions",
+                "POST /momfit-assessment",
+                "GET /assessment-stats",
+                "POST /labour-law-query",
+                "GET /labour-law-countries",
+                "POST /feedback",
+                "POST /admin/reload-vectorstore"
+            ],
+            "payment": [
+                "POST /api/customers",
+                "POST /api/initialize-payment",
+                "POST /api/verify-payment",
+                "POST /api/create-subscription",
+                "GET /api/subscription-status/{email}",
+                "POST /api/cancel-subscription/{email}",
+                "POST /api/webhooks/paystack",
+                "GET /api/admin/customers"
+            ]
+        }
+    })
 
 @app.post("/welcome")
 async def welcome_user(request: Request, session: str = Depends(verify_session)):
@@ -840,103 +736,6 @@ async def welcome_user(request: Request, session: str = Depends(verify_session))
     return JSONResponse({
         "response": welcome_message
     })
-
-@app.post("/labour-law-query")
-async def labour_law_query(request_data: LabourLawQuery, session: str = Depends(verify_session)):
-    try:
-        rag = get_rag_instance()
-
-        if not rag.documents_loaded:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error": "Labour law system is not initialized",
-                    "message": "Please try again in a moment or contact support"
-                }
-            )
-
-        if not request_data.query or len(request_data.query.strip()) < 5:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Please provide a valid question (minimum 5 characters)"}
-            )
-
-        if request_data.country:
-            supported_countries = rag.get_supported_countries()
-            if request_data.country not in supported_countries:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": f"Country '{request_data.country}' not supported",
-                        "supported_countries": supported_countries
-                    }
-                )
-
-        logger.info(f"Labour law query: '{request_data.query}' for country: {request_data.country or 'All'}")
-
-        result = rag.generate_answer(
-            query=request_data.query,
-            country=request_data.country,
-            user_context=request_data.user_context or "working mother seeking labour rights information",
-            chat_history=request_data.chat_history or []
-        )
-
-        return JSONResponse({
-            "answer": result["answer"],
-            "sources": result["sources"],
-            "chat_history": result.get("chat_history", []),
-            "metadata": {
-                "country": result.get("country"),
-                "confidence": result.get("confidence"),
-                "query": request_data.query,
-                "timestamp": datetime.now().isoformat()
-            },
-            "next_steps": [
-                "Ask another labour law question",
-                "Search for jobs in your country",
-                "Get CV feedback (privacy protected)",
-                "Take MomFit Assessment"
-            ],
-            "disclaimer": "This information is for educational purposes. For specific legal advice, please consult a qualified employment lawyer in your country."
-        })
-
-    except Exception as e:
-        logger.error(f"Labour law query error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Failed to process labour law query",
-                "message": "Please try again or rephrase your question"
-            }
-        )
-
-
-@app.get("/labour-law-countries")
-async def get_labour_law_countries(session: str = Depends(verify_session)):
-    try:
-        rag = get_rag_instance()
-        countries = rag.get_supported_countries()
-        stats = rag.get_system_stats()
-        
-        return JSONResponse({
-            "supported_countries": countries,
-            "total_countries": len(countries),
-            "system_stats": stats,
-            "example_queries": [
-                "What are my maternity leave rights?",
-                "Can I request flexible work hours?",
-                "What protection do I have against pregnancy discrimination?",
-                "What are my rights if I'm breastfeeding at work?",
-                "Can I be fired while on maternity leave?"
-            ]
-        })
-        
-    except Exception as e:
-        logger.error(f"Error getting labour law countries: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to retrieve country information"}
-        )
 
 
 @app.get("/jobs")
@@ -985,10 +784,10 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
         return JSONResponse({
             "jobs": complete_jobs,
             "total_jobs": len(complete_jobs),
-            "message": f"Showing all {len(complete_jobs)} available job(s). Click on any job to view details and apply.",
+            "message": f"Showing all {len(complete_jobs)} available job(s).",
             "suggestions": [
-                "Analyze your CV against a job (privacy protected)",
-                "Get CV feedback (privacy protected)",
+                "Analyze your CV against a job",
+                "Get CV feedback",
                 "Take MomFit Assessment"
             ] if complete_jobs else [
                 "No jobs available at the moment",
@@ -1093,6 +892,7 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             content={"error": "Search failed", "details": str(e)}
         )
 
+
 @app.post("/cv-job-match")
 async def analyze_cv_job_match_hybrid_endpoint(
     file: UploadFile = File(...), 
@@ -1109,195 +909,125 @@ async def analyze_cv_job_match_hybrid_endpoint(
         elif file.filename.endswith(".docx"):
             original_cv_content = extract_text_from_docx(file.file)
         else:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Unsupported file type. Please upload PDF or DOCX files."}
-            )
-
-        if not original_cv_content.strip():
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Could not extract text from the uploaded file."}
-            )
-
-        cleaned_cv_content = remove_personal_info_from_cv(original_cv_content)
-        privacy_validation = log_privacy_protection(original_cv_content, cleaned_cv_content, "cv-job-match")
+            raise HTTPException(status_code=400, detail="File must be PDF or DOCX")
         
-        if not privacy_validation["privacy_check_passed"]:
-            logger.error(f"PRIVACY BREACH DETECTED in job match: {privacy_validation['issues_found']}")
-
-        match_data = calculate_cv_job_match_hybrid(cleaned_cv_content, jobDescription, jobTitle)
+        if not original_cv_content or len(original_cv_content.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Could not extract text from file")
         
-        ai_prompt = f"""
-        Create a CV match analysis in this EXACT format:
-
-        CV Match Analysis Complete!
-        CV Match Score: {match_data['overall_match']}%
-
-        Strengths:
-        - [Identify 2-3 specific strengths from the privacy-protected CV that align with the job]
-
-        Areas to Improve:
-        - [Identify 2-3 specific areas where the CV lacks alignment with the job requirements]
-
-        Action Steps:
-        - [Provide 3 specific, actionable steps the candidate can take to improve their CV for this role]
-
-        Pro Tip: [One encouraging insight about how their existing experience could be valuable]
-
-        PRIVACY-PROTECTED CV CONTENT: {cleaned_cv_content[:1500]}
-        JOB: {jobTitle} at {company}
-        JOB DESCRIPTION: {jobDescription[:800]}
+        cleaned_cv = remove_personal_info_from_cv(original_cv_content)
+        privacy_validation = log_privacy_protection(original_cv_content, cleaned_cv, "cv-job-match")
         
-        ALGORITHMIC SCORES:
-        - Keyword Match: {match_data['breakdown']['keyword_match']}%
-        - Skills Match: {match_data['breakdown']['skills_match']}%
-        - Experience Match: {match_data['breakdown']['experience_match']}%
+        logger.info(f"Analyzing CV for job: {jobTitle} at {company}")
         
-        MISSING KEYWORDS: {', '.join(match_data['missing_keywords'])}
-        STRENGTHS FOUND: {', '.join(match_data['strengths'])}
-
-        Be encouraging but completely honest about what's actually in the CV.
-        """
-
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a supportive career coach. The CV has been privacy-protected. Generate feedback focusing on professional content only."
-            },
-            {
-                "role": "user",
-                "content": ai_prompt
-            }
-        ]
-
-        ai_response = get_ai_response(messages, max_tokens=600)
-        ranking = get_match_ranking(match_data['overall_match'])
-
+        match_result = calculate_cv_job_match_hybrid(cleaned_cv, jobDescription, jobTitle)
+        ranking = get_match_ranking(match_result["overall_match"])
+        
         return JSONResponse({
-            "response": ai_response,
-            "match_score": match_data['overall_match'],
-            "ranking": ranking["level"],  
-            "ranking_details": ranking,   
-            "breakdown": match_data['breakdown'],
-            "strengths": match_data['strengths'],
-            "missing_keywords": match_data['missing_keywords'],
+            "status": "success",
+            "overall_match_percentage": match_result["overall_match"],
+            "match_level": ranking["level"],
+            "match_color": ranking["color"],
+            "match_description": ranking["description"],
+            "breakdown": {
+                "keyword_match": match_result["breakdown"]["keyword_match"],
+                "skills_match": match_result["breakdown"]["skills_match"],
+                "experience_match": match_result["breakdown"]["experience_match"],
+                "semantic_similarity": match_result["breakdown"]["semantic_similarity"]
+            },
+            "strengths": match_result["strengths"],
+            "missing_keywords": match_result["missing_keywords"],
             "privacy_protection": {
-                "enabled": True,
-                "status": "Protected" if privacy_validation["privacy_check_passed"] else "Warning",
+                "status": privacy_validation["privacy_check_passed"],
                 "reduction_percentage": privacy_validation["statistics"]["reduction_percentage"]
             },
-            "job_title": jobTitle,
-            "company": company,
-            "timestamp": datetime.now().isoformat(),
-            "next_steps": [
-                "Apply to this job" if match_data['overall_match'] >= 70 else "Improve CV first",
-                "Search for similar positions", 
-                "Take MomFit Assessment"
+            "recommendations": [
+                "Add any missing keywords to your CV",
+                "Highlight relevant experience",
+                "Emphasize key skills from the job description"
             ]
         })
-
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"CV job match error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to analyze CV match. Please try again."}
-        )
+        logger.error(f"CV analysis error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error analyzing CV: {str(e)}")
+
 
 @app.get("/assessment-questions")
 async def get_assessment_questions(session: str = Depends(verify_session)):
     try:
-        instructions = get_assessment_instructions()
-        
         return JSONResponse({
-            "questions": ASSESSMENT_QUESTIONS,
-            "instructions": instructions,
-            "metadata": {
-                "total_questions": len(ASSESSMENT_QUESTIONS["career_readiness"]) + len(ASSESSMENT_QUESTIONS["work_life_balance"]),
-                "career_readiness_questions": len(ASSESSMENT_QUESTIONS["career_readiness"]),
-                "work_life_balance_questions": len(ASSESSMENT_QUESTIONS["work_life_balance"]),
-                "estimated_time_minutes": 7,
-                "scoring_scale": "1-5 (Strongly Disagree to Strongly Agree)"
-            }
+            "assessment_sections": {
+                "career_readiness": {
+                    "title": "Career Readiness Assessment",
+                    "focus_areas": ["Career goals", "Skills", "Experience", "Professional development"],
+                    "question_count": len(ASSESSMENT_QUESTIONS.get("career_readiness", []))
+                },
+                "work_life_balance": {
+                    "title": "Work-Life Balance Assessment",
+                    "focus_areas": ["Time management", "Support systems", "Stress management"],
+                    "question_count": len(ASSESSMENT_QUESTIONS.get("work_life_balance", []))
+                }
+            },
+            "total_questions": sum(len(q) for q in ASSESSMENT_QUESTIONS.values()),
+            "estimated_time_minutes": 15
         })
-        
     except Exception as e:
-        logger.error(f"Assessment questions error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to retrieve assessment questions"}
-        )
+        logger.error(f"Error getting assessment questions: {e}")
+        return JSONResponse(status_code=500, content={"error": "Failed to retrieve questions"})
+
 
 @app.post("/momfit-assessment")
-async def submit_momfit_assessment(
-    responses: AssessmentResponse,
-    session: str = Depends(verify_session)
-):
+async def momfit_assessment(request: Request, session: str = Depends(verify_session)):
     try:
-        is_valid, error_message = validate_responses(responses.dict())
-        if not is_valid:
+        data = await request.json()
+        responses = data.get("responses", {})
+        
+        if not responses:
+            raise HTTPException(status_code=400, detail="responses are required")
+        
+        validation_result = validate_responses(responses)
+        if not validation_result["valid"]:
             return JSONResponse(
                 status_code=400,
-                content={"error": "Invalid responses", "details": error_message}
+                content={"error": validation_result["error"]}
             )
         
-        scores = calculate_assessment_scores(responses.dict())
+        scores = calculate_assessment_scores(responses)
         feedback = generate_assessment_feedback(scores)
         
         return JSONResponse({
-            "scores": {
-                "career_readiness": scores["career_readiness_score"],
-                "work_life_balance": scores["work_life_balance_score"], 
-                "overall": scores["overall_score"]
-            },
-            "detailed_scores": scores,
+            "status": "success",
+            "scores": scores,
             "feedback": feedback,
-            "timestamp": datetime.now().isoformat(),
-            "next_steps": [
-                "Search for jobs that match your readiness level",
-                "Get CV feedback to improve your profile (privacy protected)",
-                "Explore work-life balance resources",
-                "Connect with our career coaching services"
+            "recommendations": [
+                "Based on your career readiness score, focus on developing key skills",
+                "Prioritize work-life balance for sustainable career growth",
+                "Schedule regular career development activities"
             ]
         })
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"MomFit assessment error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Failed to process assessment", "details": str(e)}
-        )
+        logger.error(f"Assessment error: {e}")
+        raise HTTPException(status_code=500, detail=f"Assessment failed: {str(e)}")
+
 
 @app.get("/assessment-stats")
-async def get_assessment_stats(session: str = Depends(verify_session)):
+async def assessment_statistics(session: str = Depends(verify_session)):
     try:
         return JSONResponse({
-            "assessment_info": {
-                "name": "MomFit Mini Assessment",
-                "version": "1.0.0",
-                "total_questions": len(ASSESSMENT_QUESTIONS["career_readiness"]) + len(ASSESSMENT_QUESTIONS["work_life_balance"]),
-                "categories": ["career_readiness", "work_life_balance"],
-                "scoring": {
-                    "scale": "1-5 Likert Scale",
-                    "range": "0-100 points",
-                    "interpretation": {
-                        "0-40": "Needs Development",
-                        "41-70": "Moderate Level", 
-                        "71-85": "Strong Level",
-                        "86-100": "Excellent Level"
-                    }
-                },
-                "estimated_time": "5-7 minutes",
-                "target_audience": "Working mothers and mothers seeking to return to work"
-            },
-            "question_breakdown": {
+            "assessment_stats": {
+                "total_sections": 2,
                 "career_readiness": {
                     "count": len(ASSESSMENT_QUESTIONS["career_readiness"]),
-                    "focus_areas": ["Skills confidence", "Career goals", "Professional development", "Job search readiness"]
+                    "focus_areas": ["Career goals", "Skills", "Experience"]
                 },
                 "work_life_balance": {
                     "count": len(ASSESSMENT_QUESTIONS["work_life_balance"]),
-                    "focus_areas": ["Time management", "Support systems", "Stress management", "Family-work integration"]
+                    "focus_areas": ["Time management", "Support systems", "Stress management"]
                 }
             }
         })
@@ -1309,113 +1039,104 @@ async def get_assessment_stats(session: str = Depends(verify_session)):
             content={"error": "Failed to retrieve assessment statistics"}
         )
 
-@app.get("/health")
-async def health_check():
-    try:
-        test_response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Test"}],
-            max_tokens=5
-        )
-        openai_status = "Connected"
-    except Exception:
-        openai_status = "Error"
-    
-    try:
-        jobs = get_all_jobs()
-        job_data_status = f"{len(jobs)} jobs loaded"
-    except Exception:
-        job_data_status = "Job data error"
-    
-    try:
-        test_cv = "John Doe john@email.com (555) 123-4567 Professional Summary: Software developer"
-        cleaned = remove_personal_info_from_cv(test_cv)
-        privacy_status = "Active" if "[EMAIL REMOVED]" in cleaned else "Failed"
-    except Exception:
-        privacy_status = "Error"
-    
+
+@app.post("/labour-law-query")
+async def labour_law_query(request_data: LabourLawQuery, session: str = Depends(verify_session)):
     try:
         rag = get_rag_instance()
+
+        if not rag.documents_loaded:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Labour law system is not initialized",
+                    "message": "Please try again in a moment"
+                }
+            )
+
+        if not request_data.query or len(request_data.query.strip()) < 5:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Please provide a valid question (minimum 5 characters)"}
+            )
+
+        if request_data.country:
+            supported_countries = rag.get_supported_countries()
+            if request_data.country not in supported_countries:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": f"Country '{request_data.country}' not supported",
+                        "supported_countries": supported_countries
+                    }
+                )
+
+        logger.info(f"Labour law query: '{request_data.query}' for country: {request_data.country or 'All'}")
+
+        result = rag.generate_answer(
+            query=request_data.query,
+            country=request_data.country,
+            user_context=request_data.user_context or "working mother seeking labour rights information",
+            chat_history=request_data.chat_history or []
+        )
+
+        return JSONResponse({
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "chat_history": result.get("chat_history", []),
+            "metadata": {
+                "country": result.get("country"),
+                "confidence": result.get("confidence"),
+                "query": request_data.query,
+                "timestamp": datetime.now().isoformat()
+            },
+            "next_steps": [
+                "Ask another labour law question",
+                "Search for jobs in your country",
+                "Get CV feedback",
+                "Take MomFit Assessment"
+            ],
+            "disclaimer": "This information is for educational purposes. For specific legal advice, consult a qualified employment lawyer."
+        })
+
+    except Exception as e:
+        logger.error(f"Labour law query error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to process labour law query",
+                "message": "Please try again or rephrase your question"
+            }
+        )
+
+
+@app.get("/labour-law-countries")
+async def get_labour_law_countries(session: str = Depends(verify_session)):
+    try:
+        rag = get_rag_instance()
+        countries = rag.get_supported_countries()
         stats = rag.get_system_stats()
         
-        if stats['documents_loaded']:
-            labour_law_status = f"Active - {stats['total_chunks']} chunks"
-            gdrive_info = {
-                "enabled": stats.get('gdrive_enabled', False),
-                "local_cache": stats.get('local_cache_exists', False)
-            }
-        else:
-            labour_law_status = "Not initialized"
-            gdrive_info = {"enabled": False, "local_cache": False}
-            
-    except Exception:
-        labour_law_status = "Error"
-        gdrive_info = {"enabled": False, "local_cache": False}
-    
-    return JSONResponse({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {
-            "api": "Running",
-            "openai": openai_status,
-            "job_data": job_data_status,
-            "assessment": "Available",
-            "privacy_protection": privacy_status,
-            "labour_law_rag": labour_law_status,
-            "session_management": "Active"
-        },
-        "session_stats": session_store.get_stats(),
-        "google_drive": gdrive_info,
-        "version": "1.0.0",
-        "file_limits": {
-            "max_size": "5MB",
-            "supported_formats": ["PDF", "DOCX"]
-        }
-    })
-    
-    
-@app.get("/api-info")
-async def get_api_info():
-    return JSONResponse({
-        "name": "Motherboard Career Assistant API",
-        "version": "1.0.0",
-        "description": "API for helping mothers navigate work and career with privacy protection",
-        "target_regions": ["Ghana", "Nigeria", "Kenya", "Global"],
-        "capabilities": [
-            "Privacy-Protected CV Analysis and Feedback",
-            "Privacy-Protected CV-Job Match Analysis",
-            "MomFit Career Assessment",
-            "Job Search and Matching",
-            "Personalized Career Guidance",
-            "Session-based Security"
-        ],
-        "privacy_features": [
-            "Automatic personal information removal",
-            "Real-time privacy validation",
-            "Professional content preservation",
-            "Comprehensive logging"
-        ],
-        "security_features": [
-            "Session-based authentication",
-            "2-hour session expiry",
-            "Automatic session cleanup",
-            "No exposed API tokens"
-        ],
-        "supported_file_types": ["PDF", "DOCX"],
-        "file_limits": {
-            "max_size": "5MB",
-            "timeout": "30 seconds"
-        },
-        "authentication": "Session Token Required (from /create-session)",
-        "rate_limits": {
-            "general": "100 requests per hour",
-            "file_uploads": "20 uploads per hour"
-        },
-        "contact": {
-            "support": "support@motherboard-career.com",
-            "documentation": "/docs"
-        }
-    })
+        return JSONResponse({
+            "supported_countries": countries,
+            "total_countries": len(countries),
+            "system_stats": stats,
+            "example_queries": [
+                "What are my maternity leave rights?",
+                "Can I request flexible work hours?",
+                "What protection do I have against pregnancy discrimination?",
+                "What are my rights if I'm breastfeeding at work?",
+                "Can I be fired while on maternity leave?"
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting labour law countries: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to retrieve country information"}
+        )
+
 
 @app.post("/feedback")
 async def submit_feedback(request: Request, session: str = Depends(verify_session)):
@@ -1431,7 +1152,7 @@ async def submit_feedback(request: Request, session: str = Depends(verify_sessio
         logger.info(f"Comment: {comment}")
         
         return JSONResponse({
-            "message": "Thank you for your feedback! We appreciate you helping us improve Motherboard.",
+            "message": "Thank you for your feedback!",
             "feedback_id": f"feedback_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             "timestamp": datetime.now().isoformat()
         })
@@ -1442,6 +1163,33 @@ async def submit_feedback(request: Request, session: str = Depends(verify_sessio
             status_code=500,
             content={"error": "Failed to submit feedback"}
         )
+
+
+@app.post("/admin/reload-vectorstore")
+async def admin_reload_vectorstore(token: str = Depends(verify_token)):
+    try:
+        logger.info("Admin: Manual vectorstore reload initiated...")
+        
+        rag = get_rag_instance()
+        doc_count = rag.reload_from_gdrive()
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Vector store reloaded successfully",
+            "document_chunks": doc_count,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin reload failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Failed to reload vector store", 
+                "details": str(e)
+            }
+        )
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -1454,6 +1202,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         }
     )
 
+
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}")
@@ -1461,16 +1210,16 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "error": "An unexpected error occurred",
-            "message": "Please try again later or contact support",
+            "message": "Please try again later",
             "timestamp": datetime.now().isoformat()
         }
     )
 
+
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting Motherboard Career Assistant API...")
+    logger.info("Starting Motherboard Career Assistant API (v2)...")
+    logger.info("Features: Career Guidance + Payment Management")
     logger.info("Privacy Protection: ENABLED")
     logger.info("Session Management: ENABLED")
-    logger.info("Serving mothers in Ghana, Nigeria, Kenya and beyond")
-    logger.info("Features: CV Analysis, Job Search, MomFit Assessment")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -27,3 +27,6 @@ venv/
 
 vectorstore/
 *.pkl
+aibot.html
+aibot2.html
+jobs.csv

@@ -1,0 +1,1794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Motherboard - Career Assistant</title>
+  <style>
+    html { box-sizing: border-box; }
+    *, *::before, *::after { box-sizing: inherit; }
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: #111111;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      line-height: 1.65;
+      overflow-x: hidden;
+    }
+    .container { max-width: 1120px; margin: 0 auto; padding: 32px 20px; }
+    .welcome-section { text-align: center; margin-bottom: 36px; }
+    .welcome-section h1 {
+      color: #000000 !important;
+      font-size: 32px;
+      font-weight: 800;
+      margin: 0 0 36px;
+      line-height: 1.3;
+    }
+    .welcome-section h2 {
+      color: #000000 !important;
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 36px;
+      line-height: 1.5;
+    }
+    .features-grid {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+    .feature-card {
+      background: #fef3c7;
+      color: #000000;
+      padding: 24px 60px;
+      border-radius: 12px;
+      text-align: center;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 20px;
+      transition: transform .18s ease, box-shadow .18s ease;
+      box-shadow: 0 4px 14px rgba(0,0,0,.1);
+      flex: 0 0 auto;
+      border: 2px solid #fbbf24;
+    }
+    .feature-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0,0,0,.15);
+      background: #fde68a;
+    }
+    .feature-card h3 { margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
+    .feature-card.assessment {
+      background: #fef3c7;
+      color: #000000;
+      border: 2px solid #fbbf24;
+    }
+    .feature-card.assessment:hover {
+      background: #fde68a;
+    }
+    .feature-card.labour-law {
+      background: #fef3c7;
+      color: #000000;
+      border: 2px solid #fbbf24;
+    }
+    .feature-card.labour-law:hover {
+      background: #fde68a;
+    }
+    .search-filters {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      border: 2px solid #e9ecef;
+    }
+    .filter-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+    .filter-group {
+      flex: 1 1 150px;
+      min-width: 150px;
+      max-width: 280px;
+    }
+    .filter-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #000;
+      font-size: 14px;
+    }
+    .filter-group select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 2px solid #dee2e6;
+      border-radius: 8px;
+      font-size: 13px;
+      background: white;
+    }
+    .filter-group select:focus {
+      outline: none;
+      border-color: #000;
+    }
+    .filter-buttons {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .filter-btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .filter-btn.apply {
+      background: #000;
+      color: #fff;
+    }
+    .filter-btn.apply:hover {
+      background: #333;
+    }
+    .filter-btn.clear {
+      background: #f8f9fa;
+      color: #000;
+      border: 2px solid #dee2e6;
+    }
+    .filter-btn.clear:hover {
+      background: #e9ecef;
+    }
+    .filter-summary {
+      margin-top: 12px;
+      padding: 12px;
+      background: white;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #666;
+      display: none;
+    }
+    .filter-summary.active {
+      display: block;
+    }
+    .filter-tag {
+      display: inline-block;
+      background: #000;
+      color: #fff;
+      padding: 4px 12px;
+      border-radius: 16px;
+      font-size: 13px;
+      margin-right: 8px;
+      margin-top: 4px;
+    }
+    .content-section {
+      background: #ffffff;
+      color: #000000;
+      border-radius: 16px;
+      padding: 24px;
+      margin: 26px 0;
+      display: none;
+    }
+    .content-section h2, .content-section p, .content-section label, .content-section small { 
+      color: #000000; 
+    }
+    .form-group { margin-bottom: 20px; }
+    .form-group label {
+      display: block;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+    .assessment-intro {
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      border-left: 4px solid #fbbf24;
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    .labour-law-intro {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-left: 4px solid #fbbf24;
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    .assessment-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 20px;
+      padding: 40px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      position: relative;
+    }
+    .question-container {
+      text-align: center;
+      margin-bottom: 40px;
+      width: 100%;
+    }
+    .question-header {
+      margin-bottom: 30px;
+    }
+    .question-counter {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .question-text {
+      font-size: 22px;
+      font-weight: 600;
+      color: #333;
+      line-height: 1.4;
+      margin-bottom: 30px;
+    }
+    .options-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 40px;
+      width: 100%;
+      max-width: 100%;
+    }
+    .option-button {
+      padding: 16px 24px;
+      background: #f8f9fa;
+      border: 2px solid #e9ecef;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      color: #333;
+    }
+    .option-button:hover {
+      background: #e9ecef;
+      border-color: #dee2e6;
+    }
+    .option-button.selected {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      border-color: #fbbf24;
+      color: #000000;
+    }
+    .option-button input[type="radio"] {
+      margin: 0;
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .navigation-buttons {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 30px;
+    }
+    .nav-btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      color: #000000;
+      flex: 1;
+    }
+    .nav-btn:hover:not(:disabled) {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    }
+    .nav-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    .nav-btn.secondary {
+      background: #e9ecef;
+      color: #333;
+    }
+    .nav-btn.secondary:hover:not(:disabled) {
+      background: #dee2e6;
+    }
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e9ecef;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 30px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%);
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .btn-pill {
+      display: inline-block;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all .18s ease;
+      border: none;
+      text-decoration: none;
+      text-align: center;
+      background: #000;
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    }
+    .btn-pill:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,.2);
+    }
+    .btn-pill.primary {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      color: #000000;
+    }
+    .btn-pill.secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    .btn-pill.success {
+      background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+      color: #000000;
+    }
+    .spinner {
+      border: 4px solid #f0f0f0;
+      border-top: 4px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    #loading-jobs, #loading-assessment {
+      text-align: center;
+      padding: 32px;
+      color: #666;
+      font-weight: 500;
+    }
+    .jobs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 18px;
+    }
+    .job-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease;
+      border: 2px solid #f0f0f0;
+    }
+    .job-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,.12);
+      border-color: #667eea;
+    }
+    .job-card h4 {
+      margin: 0 0 10px 0;
+      color: #000;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .job-card .company {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .job-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: #888;
+      margin-top: 12px;
+    }
+    .job-meta span {
+      background: #f0f0f0;
+      padding: 4px 10px;
+      border-radius: 12px;
+    }
+    .detail-row {
+      display: flex;
+      padding: 12px 0;
+      border-bottom: 1px solid #e9ecef;
+      flex-wrap: wrap;
+    }
+    .detail-label {
+      font-weight: 600;
+      color: #000;
+      min-width: 120px;
+      flex-shrink: 0;
+    }
+    .detail-row > span:last-child, .detail-row > div {
+      color: #555;
+      flex: 1;
+    }
+    .error-message, .success-message {
+      padding: 16px;
+      border-radius: 8px;
+      margin: 16px 0;
+      font-weight: 500;
+    }
+    .error-message {
+      background: #fef2f2;
+      color: #dc2626;
+      border: 1px solid #fecaca;
+    }
+    .success-message {
+      background: #f0fdf4;
+      color: #16a34a;
+      border: 1px solid #bbf7d0;
+    }
+    .score-display {
+      display: flex;
+      justify-content: space-around;
+      gap: 16px;
+      margin: 24px 0;
+      flex-wrap: wrap;
+    }
+    .score-item {
+      text-align: center;
+      flex: 1;
+      min-width: 100px;
+    }
+    .score-value {
+      font-size: 36px;
+      font-weight: 800;
+      color: #f59e0b;
+      margin-bottom: 8px;
+    }
+    .score-label {
+      font-size: 14px;
+      color: #666;
+      font-weight: 600;
+    }
+    .assessment-results {
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      border-radius: 16px;
+      padding: 28px;
+      margin-top: 24px;
+      border-left: 4px solid #f59e0b;
+    }
+    .labour-law-wrapper {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      z-index: 9999;
+      overflow-y: auto;
+      display: none;
+      flex-direction: column;
+    }
+    .labour-law-wrapper.active {
+      display: flex;
+    }
+    .labour-law-container {
+      width: 100%;
+      max-width: 1000px;
+      margin: 0 auto;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .labour-law-header {
+      text-align: center;
+      padding: 20px 0;
+      position: relative;
+    }
+    .labour-law-header h2 {
+      color: #000 !important;
+      margin: 0 0 8px 0;
+      font-size: 28px;
+      font-weight: 800;
+    }
+    .labour-law-header p {
+      color: #666 !important;
+      margin: 0;
+      font-size: 16px;
+    }
+    .chat-welcome-centered {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      text-align: center;
+      padding: 40px 20px;
+    }
+    .sparkle-icon {
+      width: 80px;
+      height: 80px;
+      background: #000;
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: 800;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    }
+    .chat-welcome-centered h1 {
+      color: #000;
+      margin: 0 0 12px 0;
+      font-size: 32px;
+      font-weight: 800;
+    }
+    .chat-welcome-centered p {
+      color: #666;
+      margin: 0 0 32px 0;
+      font-size: 16px;
+      max-width: 500px;
+    }
+    .country-selector-inline {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 0px;
+      width: 100%;
+      max-width: 300px;
+    }
+    .country-selector-inline label {
+      font-weight: 600;
+      color: #000;
+      font-size: 15px;
+      text-align: left;
+    }
+    .country-selector-inline select {
+      padding: 14px 18px;
+      border: 2px solid #000;
+      border-radius: 12px;
+      font-size: 15px;
+      background: white;
+      color: #000;
+      cursor: pointer;
+    }
+    .parallel-input-container {
+      display: flex;
+      gap: 12px;
+      width: 100%;
+      max-width: 900px;
+      margin-bottom: 24px;
+      align-items: flex-end;
+    }
+    .chat-input-centered {
+      display: flex;
+      gap: 12px;
+      width: 100%;
+      max-width: 560px;
+      flex: 1;
+    }
+    .chat-input-centered input {
+      flex: 1;
+      padding: 14px 18px;
+      border: 2px solid #000;
+      border-radius: 12px;
+      font-size: 15px;
+      background: white;
+    }
+    .send-btn-centered {
+      padding: 14px 28px;
+      background: #000;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 15px;
+    }
+    .send-btn-centered:hover {
+      background: #333;
+      transform: scale(1.02);
+    }
+    .chat-container {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      background: white;
+      border-radius: 20px;
+      overflow: hidden;
+      min-height: 0;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .chat-message {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .chat-message.user {
+      flex-direction: row-reverse;
+    }
+    .message-bubble {
+      max-width: 85%;
+      padding: 16px 20px;
+      border-radius: 18px;
+      line-height: 1.8;
+      word-wrap: break-word;
+    }
+    .chat-message.user .message-bubble {
+      background: #000;
+      color: #fff;
+    }
+    .chat-message.assistant .message-bubble {
+      background: #f0f0f0;
+      color: #333;
+      font-size: 15px;  
+      letter-spacing: 0.3px;
+    }
+    .chat-footer {
+      padding: 20px;
+      border-top: 2px solid #f0f0f0;
+      background: white;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .chat-input-area {
+      display: flex;
+      gap: 12px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .chat-input-area input {
+      flex: 1;
+      padding: 12px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 15px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .chat-input-area button {
+      padding: 12px 24px;
+      background: #000;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .chat-input-area button:hover {
+      background: #333;
+    }
+    #loading-labour-law {
+      display: none;
+      text-align: center;
+      padding: 20px;
+    }
+    .spinner-labour {
+      border: 3px solid #f0f0f0;
+      border-top: 3px solid #000;
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 12px;
+    }
+    .back-button-labour {
+      position: fixed;
+      left: 20px;
+      top: 80px;
+      background: rgba(0, 0, 0, 0.15);
+      color: #000;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+
+    .back-button-labour:hover {
+      background: rgba(0, 0, 0, 0.25);
+    }
+    
+    /* CV Match Styles */
+    .cv-match-section {
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      border: 2px solid #fbbf24;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .cv-match-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .cv-match-header h4 {
+      margin: 0;
+      color: #000000;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .cv-upload-area {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .file-input-wrapper {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+    }
+    .file-input-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: white;
+      border: 2px dashed #fbbf24;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-weight: 600;
+      color: #000000;
+    }
+    .file-input-label:hover {
+      background: #fffbeb;
+      border-color: #f59e0b;
+    }
+    .file-input-label.has-file {
+      border-style: solid;
+      background: #fef3c7;
+      border-color: #fbbf24;
+    }
+    input[type="file"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0,0,0,0);
+      white-space: nowrap;
+      border-width: 0;
+    }
+    .match-button {
+      padding: 12px 28px;
+      background: #000000;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+    .match-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+      background: #1a1a1a;
+    }
+    .match-button:disabled {
+      background: #000000;
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    .match-result {
+      margin-top: 16px;
+      padding: 16px;
+      background: white;
+      border-radius: 8px;
+      border-left: 4px solid #fbbf24;
+      display: none;
+    }
+    .match-result.show {
+      display: block;
+      animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .match-score {
+      font-size: 48px;
+      font-weight: 800;
+      text-align: center;
+      margin: 16px 0;
+      color: #fbbf24;
+    }
+    .match-label {
+      text-align: center;
+      color: #666;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .match-details {
+      background: #f9fafb;
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .match-details h5 {
+      margin: 0 0 12px 0;
+      color: #333;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .match-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .match-item:last-child {
+      border-bottom: none;
+    }
+    .match-item-label {
+      color: #666;
+      font-size: 14px;
+    }
+    .match-item-value {
+      color: #333;
+      font-weight: 600;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="welcome-section" class="welcome-section">
+      <h1>Welcome <span id="member-first-name">there</span>!</h1>
+      <h2>What would you like to do today?</h2>
+      <div id="features" class="features-grid">
+        <div class="feature-card" onclick="showJobSearch()" tabindex="0">
+          <h3>Job Search</h3>
+        </div>
+        <div class="feature-card assessment" onclick="showAssessment()" tabindex="0">
+          <h3>MomFit Assessment</h3>
+        </div>
+        <div class="feature-card labour-law" onclick="showLabourLaw()" tabindex="0">
+          <h3>Labour Law Chat</h3>
+        </div>
+      </div>
+    </div>
+
+    <!-- ASSESSMENT SECTION -->
+    <div id="assessment" class="content-section">
+      <button class="btn-pill" onclick="goHome()">Back</button>
+      <h2>MomFit Mini Assessment</h2>
+      <div class="assessment-intro">
+        <p><strong>Discover your career readiness and work-life balance score in just 5-7 minutes!</strong></p>
+        <p>This assessment helps working mothers understand their strengths and areas for growth.</p>
+        <ul>
+          <li><strong>20 Questions:</strong> 10 career readiness + 10 work-life balance</li>
+          <li><strong>Personalized Feedback:</strong> Get tailored recommendations</li>
+          <li><strong>Scoring:</strong> 0-100 scale with detailed insights</li>
+        </ul>
+      </div>
+      <div id="assessment-question-view" style="display: none;">
+        <div class="assessment-container">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <div class="question-container">
+            <div class="question-header">
+              <div class="question-counter" id="question-counter">Question 1 of 20</div>
+              <div class="question-text" id="current-question-text">Loading...</div>
+            </div>
+            <div class="options-container" id="current-options"></div>
+            <div class="navigation-buttons">
+              <button class="nav-btn secondary" id="prev-btn" onclick="previousQuestion()">Previous</button>
+              <button class="nav-btn" id="next-btn" onclick="nextQuestion()">Next</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="assessment-start" style="text-align: center;">
+        <button class="btn-pill primary" id="start-assessment" onclick="startAssessment()" style="font-size: 18px; padding: 16px 32px;">
+          <span id="start-btn-text">Start Assessment</span>
+          <span id="start-btn-loading" style="display: none;">Loading...</span>
+        </button>
+      </div>
+      <div id="loading-assessment" style="display:none;">
+        <div class="spinner"></div>
+        <div>Analyzing...</div>
+      </div>
+      <div id="assessment-results"></div>
+    </div>
+
+    <!-- JOB SEARCH SECTION -->
+    <div id="job-search" class="content-section">
+      <button class="btn-pill" onclick="goHome()">Back</button>
+      <h2>Job Search</h2>
+      <p>Filter jobs by location and type, then click to view details.</p>
+      <div class="search-filters">
+        <div class="filter-row">
+          <div class="filter-group">
+            <label for="country-filter">Location</label>
+            <select id="country-filter">
+              <option value="">All Locations</option>
+              <option value="Ghana">Ghana</option>
+              <option value="Nigeria">Nigeria</option>
+              <option value="Kenya">Kenya</option>
+              <option value="Remote">Remote</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="job-type-filter">Job Type</label>
+            <select id="job-type-filter">
+              <option value="">All Types</option>
+              <option value="Remote">Remote</option>
+              <option value="On-site">On-site</option>
+              <option value="Hybrid">Hybrid</option>
+              <option value="Part-time">Part-time</option>
+              <option value="Full-time">Full-time</option>
+            </select>
+          </div>
+          <div class="filter-buttons">
+            <button class="filter-btn apply" onclick="applyFilters()">Apply Filters</button>
+            <button class="filter-btn clear" onclick="clearFilters()">Clear</button>
+          </div>
+        </div>
+        <div id="filter-summary" class="filter-summary"></div>
+      </div>
+      <div id="loading-jobs">
+        <div class="spinner"></div>
+        <div>Loading jobs...</div>
+      </div>
+      <div id="jobs-list-view">
+        <div id="jobs-grid" class="jobs-grid"></div>
+      </div>
+      <div id="job-detail-view" style="display: none;">
+        <button class="btn-pill secondary" onclick="backToJobsList()" style="margin-bottom: 16px;">Back to Jobs</button>
+        <div id="job-detail-content"></div>
+      </div>
+    </div>
+
+    <!-- LABOUR LAW SECTION -->
+    <div id="labour-law-wrapper" class="labour-law-wrapper">
+      <div class="labour-law-container">
+        <div class="labour-law-header">
+          <button class="back-button-labour" onclick="goHome()">Back</button>
+          <h2>Labour Law Assistant</h2>
+          <p>Get instant answers to your employment questions</p>
+        </div>
+
+        <div id="chat-welcome-centered" class="chat-welcome-centered">
+          <div class="sparkle-icon">
+            <div style="font-size: 24px; font-weight: 800; line-height: 1; letter-spacing: -1px;">W<br>M<br>I</div>
+          </div>
+          <h1>Your Labour Rights Guide</h1>
+          <p>Select your country and ask questions about employment laws, contracts, and worker rights</p>
+          <div class="parallel-input-container">
+            <div class="country-selector-inline">
+              <label for="labour-law-country">Select Country: *</label>
+              <select id="labour-law-country" required>
+                <option value="" disabled selected>Choose a country...</option>
+                <option value="Ghana">Ghana</option>
+                <option value="Nigeria">Nigeria</option>
+                <option value="Kenya">Kenya</option>
+                <option value="Cameroon">Cameroon</option>
+                <option value="Ethiopia">Ethiopia</option>
+                <option value="Rwanda">Rwanda</option>
+                <option value="South Africa">South Africa</option>
+                <option value="Uganda">Uganda</option>
+                <option value="Zambia">Zambia</option>
+                <option value="Zimbabwe">Zimbabwe</option>
+              </select>
+            </div>
+            <div class="chat-input-centered">
+              <input type="text" id="chat-input-initial" placeholder="Ask me anything about labour laws..." />
+              <button class="send-btn-centered" onclick="sendInitialMessage()" id="send-btn-initial">
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-container" id="chat-container" style="display: none;">
+          <div class="chat-messages" id="chat-messages"></div>
+          <div class="chat-footer">
+            <div class="chat-input-area">
+              <input type="text" id="chat-input" placeholder="Ask about labour laws..." />
+              <button onclick="sendLabourLawQuery()" id="send-btn">
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="loading-labour-law">
+          <div class="spinner-labour"></div>
+          <div style="color: #666; font-weight: 500;">Getting answer...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE_URL = 'https://ai-chatbot-4bqx.onrender.com';
+    let allJobs = [];
+    let filteredJobs = [];
+    let currentJobIndex = null;
+    let currentFilters = { country: '', jobType: '' };
+    let assessmentQuestions = null;
+    let currentQuestionIndex = 0;
+    let allQuestions = [];
+    let assessmentResponses = {};
+    let labourLawChatHistory = [];
+    let currentJobCV = null;
+
+    function resolveMemberFirstName(){
+      const ctx = window.Static?.SQUARESPACE_CONTEXT;
+      return (ctx?.customer?.firstName || ctx?.authenticatedAccount?.firstName || ctx?.website?.member?.firstName || '').trim();
+    }
+    
+    function injectWelcomeName(){
+      const el = document.getElementById('member-first-name');
+      if (el) el.textContent = resolveMemberFirstName() || 'there';
+    }
+
+    function showMessage(msg, id, isErr = false) {
+      const c = document.getElementById(id);
+      if (c) c.innerHTML = `<div class="${isErr ? 'error' : 'success'}-message">${msg}</div>`;
+    }
+
+       let sessionToken = null;
+   let sessionExpiry = null;
+   
+   async function getSession() {
+     if (sessionToken && sessionExpiry && Date.now() < sessionExpiry) {
+       return sessionToken;
+     }
+     
+     const stored = sessionStorage.getItem('sessionToken');
+     const expiry = sessionStorage.getItem('sessionExpiry');
+     
+     if (stored && expiry && Date.now() < parseInt(expiry)) {
+       sessionToken = stored;
+       sessionExpiry = parseInt(expiry);
+       console.log('Using stored session');
+       return sessionToken;
+     }
+     
+     console.log('Creating new session...');
+     try {
+       const response = await fetch(`${API_BASE_URL}/create-session`, {
+         method: 'POST'
+       });
+       
+       if (!response.ok) {
+         throw new Error('Failed to create session');
+       }
+       
+       const data = await response.json();
+       sessionToken = data.session_id;
+       sessionExpiry = Date.now() + (2 * 60 * 60 * 1000);
+       
+       sessionStorage.setItem('sessionToken', sessionToken);
+       sessionStorage.setItem('sessionExpiry', sessionExpiry.toString());
+       
+       console.log('New session created');
+       return sessionToken;
+     } catch (error) {
+       console.error('Failed to create session:', error);
+       alert('Connection error. Please refresh the page.');
+       throw error;
+     }
+   }
+   async function makeRequest(endpoint, data = null, isFormData = false) {
+     const token = await getSession();
+     const url = `${API_BASE_URL}/${endpoint}`;
+     const headers = { 'Authorization': `Bearer ${token}` };
+     
+     if (!isFormData && data) headers['Content-Type'] = 'application/json';
+     
+     const opts = {
+       method: data ? 'POST' : 'GET',
+       headers,
+       mode: 'cors',
+       body: data ? (isFormData ? data : JSON.stringify(data)) : undefined
+     };
+     
+     const res = await fetch(url, opts);
+     
+     if (res.status === 401) {
+       console.log('Session expired, getting new session...');
+       sessionToken = null;
+       sessionStorage.removeItem('sessionToken');
+       sessionStorage.removeItem('sessionExpiry');
+       
+       const newToken = await getSession();
+       headers.Authorization = `Bearer ${newToken}`;
+       
+       const retryRes = await fetch(url, { ...opts, headers });
+       if (!retryRes.ok) throw new Error(`HTTP ${retryRes.status}`);
+       return retryRes.json();
+     }
+     
+     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+     return res.json();
+    }
+
+    function goHome(){
+      document.querySelectorAll('.content-section').forEach(s=>s.style.display='none');
+      document.getElementById('labour-law-wrapper').classList.remove('active');
+      document.body.style.overflow = 'auto';
+      document.getElementById('welcome-section').style.display='block';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      resetJobSearchState();
+      resetAssessmentState();
+      resetLabourLawState();
+    }
+
+    function resetJobSearchState() {
+      const g = document.getElementById('jobs-grid');
+      const d = document.getElementById('job-detail-view');
+      const l = document.getElementById('jobs-list-view');
+      if (g) g.innerHTML = '';
+      if (d) d.style.display = 'none';
+      if (l) l.style.display = 'block';
+      currentJobIndex = null;
+      clearFilters();
+    }
+
+    function resetAssessmentState() {
+      const r = document.getElementById('assessment-results');
+      const ld = document.getElementById('loading-assessment');
+      const intro = document.querySelector('.assessment-intro');
+      const start = document.getElementById('assessment-start');
+      const view = document.getElementById('assessment-question-view');
+      if (r) r.innerHTML = '';
+      if (ld) ld.style.display = 'none';
+      if (intro) intro.style.display = 'block';
+      if (start) start.style.display = 'block';
+      if (view) view.style.display = 'none';
+      currentQuestionIndex = 0;
+      assessmentResponses = {};
+    }
+
+    function resetLabourLawState() {
+      const m = document.getElementById('chat-messages');
+      const i = document.getElementById('chat-input');
+      const ld = document.getElementById('loading-labour-law');
+      const wc = document.getElementById('chat-welcome-centered');
+      const cc = document.getElementById('chat-container');
+      if (m) m.innerHTML = '';
+      if (i) i.value = '';
+      if (ld) ld.style.display = 'none';
+      if (wc) wc.style.display = 'flex';
+      if (cc) cc.style.display = 'none';
+      labourLawChatHistory = [];
+    }
+
+    function showLabourLaw(){
+      document.getElementById('welcome-section').style.display='none';
+      document.getElementById('labour-law-wrapper').classList.add('active');
+      document.body.style.overflow = 'hidden'; 
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function sendInitialMessage() {
+      const input = document.getElementById('chat-input-initial');
+      const country = document.getElementById('labour-law-country').value;
+      
+      if (!country) {
+        alert('Please select a country');
+        return;
+      }
+      
+      if (!input.value.trim()) {
+        return;
+      }
+      
+      document.getElementById('chat-welcome-centered').style.display = 'none';
+      document.getElementById('chat-container').style.display = 'flex';
+      
+      const chatInput = document.getElementById('chat-input');
+      chatInput.value = input.value;
+      sendLabourLawQuery();
+    }
+
+    async function sendLabourLawQuery() {
+      const input = document.getElementById('chat-input');
+      const query = input.value.trim();
+      const country = document.getElementById('labour-law-country').value || null;
+      const messages = document.getElementById('chat-messages');
+      const loading = document.getElementById('loading-labour-law');
+
+      if (!query) return;
+
+      const userMsg = document.createElement('div');
+      userMsg.className = 'chat-message user';
+      const userBubble = document.createElement('div');
+      userBubble.className = 'message-bubble';
+      userBubble.textContent = query;
+      userMsg.appendChild(userBubble);
+      messages.appendChild(userMsg);
+      input.value = '';
+      messages.scrollTop = messages.scrollHeight;
+
+      loading.style.display = 'block';
+
+      try {
+        const response = await makeRequest('labour-law-query', {
+          query: query,
+          country: country,
+          user_context: 'working mother seeking labour rights information',
+          chat_history: labourLawChatHistory
+        });
+
+        loading.style.display = 'none';
+
+        const assistantMsg = document.createElement('div');
+        assistantMsg.className = 'chat-message assistant';
+        
+        const assistantBubble = document.createElement('div');
+        assistantBubble.className = 'message-bubble';
+
+        // Format the response for better readability
+        let answerText = response.answer || response.response || 'Sorry, I could not process your query.';
+
+        // Step 1: Convert ALL markdown bold variations to HTML bold FIRST
+        answerText = answerText
+         .replace(/\*\s\*([^*]+)\*\s\*/g, '<strong>$1</strong>')  // * *text* * format
+         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')      // **text** format
+         .replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>');       // *text* format (single asterisk)
+        
+        // Step 2: Apply spacing rules
+        // - Detect section headers (text ending with colon at start of line or after period)
+        // - Add double line break BEFORE headers (creates blank line between sections)
+        // - Keep content immediately after headers (no blank line)
+        answerText = answerText
+         .replace(/([.!?])\s*\n(<strong>[^<]*<\/strong>:)/g, '$1\n\n$2')  // Blank line before bold headers after sentences
+         .replace(/([.!?])\s*\n([A-Z][^:\n]*:)/g, '$1\n\n$2')  // Blank line before regular headers after sentences
+         .replace(/^\s*([A-Z][^:\n]*:)/gm, '\n$1')  // Ensure headers start on new line
+         .replace(/^\n+/, '')  // Remove leading blank lines at start
+         .replace(/(:[^<\n]*)\s*\n\n/g, '$1\n')  // Remove blank line immediately after headers
+         .replace(/• /g, '\n• ')  // Line break before bullet points
+         .replace(/\d+\.\s/g, '\n$&')  // Line break before numbered lists
+         .replace(/\n{3,}/g, '\n\n');  // Clean up excessive line breaks (max 2 = 1 blank line)
+        
+        // Step 3: Convert line breaks to HTML
+        assistantBubble.innerHTML = answerText.replace(/\n/g, '<br>');
+        
+        assistantMsg.appendChild(assistantBubble);
+        messages.appendChild(assistantMsg);
+        messages.scrollTop = messages.scrollHeight;
+
+        labourLawChatHistory.push({
+          role: 'user',
+          content: query
+        });
+        labourLawChatHistory.push({
+          role: 'assistant',
+          content: response.answer || ''
+        });
+
+      } catch (error) {
+        loading.style.display = 'none';
+        const errorMsg = document.createElement('div');
+        errorMsg.className = 'chat-message assistant';
+        const errorBubble = document.createElement('div');
+        errorBubble.className = 'message-bubble';
+        errorBubble.textContent = 'Sorry, there was an error processing your request.';
+        errorMsg.appendChild(errorBubble);
+        messages.appendChild(errorMsg);
+        messages.scrollTop = messages.scrollHeight;
+        console.error('Labour law query error:', error);
+      }
+    }
+
+    async function showAssessment() {
+      document.getElementById('welcome-section').style.display = 'none';
+      document.getElementById('assessment').style.display = 'block';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function showJobSearch() {
+      document.getElementById('welcome-section').style.display = 'none';
+      document.getElementById('job-search').style.display = 'block';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      await loadJobs();
+    }
+
+    async function loadJobs() {
+      const loadingDiv = document.getElementById('loading-jobs');
+      const grid = document.getElementById('jobs-grid');
+      
+      if (allJobs.length > 0) {
+        loadingDiv.style.display = 'none';
+        displayJobs(allJobs);
+        return;
+      }
+
+      loadingDiv.style.display = 'block';
+      grid.innerHTML = '';
+      
+      try {
+        const response = await makeRequest('jobs');
+        
+        if (response && response.jobs) {
+          allJobs = response.jobs;
+          filteredJobs = allJobs;
+          displayJobs(allJobs);
+        } else {
+          grid.innerHTML = '<div class="error-message">No jobs found.</div>';
+        }
+      } catch (error) {
+        grid.innerHTML = '<div class="error-message">Failed to load jobs. Please try again.</div>';
+        console.error('Error loading jobs:', error);
+      } finally {
+        loadingDiv.style.display = 'none';
+      }
+    }
+
+    function clearFilters() {
+      document.getElementById('country-filter').value = '';
+      document.getElementById('job-type-filter').value = '';
+      currentFilters = { country: '', jobType: '' };
+      filteredJobs = allJobs;
+      displayJobs(allJobs);
+      const summary = document.getElementById('filter-summary');
+      if (summary) summary.classList.remove('active');
+    }
+
+    function applyFilters() {
+      const country = document.getElementById('country-filter').value;
+      const jobType = document.getElementById('job-type-filter').value;
+      
+      currentFilters = { country, jobType };
+      
+      filteredJobs = allJobs.filter(job => {
+        const matchCountry = !country || job.location?.includes(country);
+        const matchJobType = !jobType || job.job_type?.includes(jobType);
+        return matchCountry && matchJobType;
+      });
+      
+      displayJobs(filteredJobs);
+      
+      const summary = document.getElementById('filter-summary');
+      if (summary) {
+        if (country || jobType) {
+          summary.classList.add('active');
+          let tags = '';
+          if (country) tags += `<span class="filter-tag">Location: ${country}</span>`;
+          if (jobType) tags += `<span class="filter-tag">Type: ${jobType}</span>`;
+          summary.innerHTML = `Filtering: ${tags} <span style="margin-left: 8px;">(${filteredJobs.length} jobs)</span>`;
+        } else {
+          summary.classList.remove('active');
+        }
+      }
+    }
+
+    function displayJobs(jobs) {
+      const g = document.getElementById('jobs-grid');
+      if (!g) return;
+      
+      g.innerHTML = '';
+      
+      if (jobs.length === 0) {
+        g.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #666;">No jobs match your filters.</div>';
+        return;
+      }
+      
+      jobs.forEach((job, idx) => {
+        const c = document.createElement('div');
+        c.className = 'job-card';
+        c.onclick = () => showJobDetail(idx);
+        c.innerHTML = `
+          <h4>${job.job_title || 'N/A'}</h4>
+          <div class="company">${job.company_name || 'N/A'}</div>
+          <div class="job-meta">
+            <span>${job.location || 'N/A'}</span>
+            <span>${job.job_type || 'N/A'}</span>
+          </div>
+        `;
+        g.appendChild(c);
+      });
+    }
+
+    function showJobDetail(idx) {
+      currentJobIndex = idx;
+      currentJobCV = null; // Reset CV for new job
+      const job = filteredJobs[idx];
+      document.getElementById('jobs-list-view').style.display = 'none';
+      document.getElementById('job-detail-view').style.display = 'block';
+      const desc = job.job_description || job['Job Description (Brief Summary)'] || 'No description';
+      const link = job.application_link || '';
+      document.getElementById('job-detail-content').innerHTML = `
+        <div class="job-card">
+          <h4>${job.job_title || 'N/A'}</h4>
+          <div class="detail-row"><span class="detail-label">Company:</span><span>${job.company_name || 'N/A'}</span></div>
+          <div class="detail-row"><span class="detail-label">Location:</span><span>${job.location || 'N/A'}</span></div>
+          <div class="detail-row"><span class="detail-label">Job Type:</span><span>${job.job_type || 'N/A'}</span></div>
+          <div class="detail-row"><span class="detail-label">Industry:</span><span>${job.industry || 'N/A'}</span></div>
+          <div class="detail-row"><span class="detail-label">Skills:</span><span>${job.skills_required || 'N/A'}</span></div>
+          <div class="detail-row"><span class="detail-label">Deadline:</span><span>${job.application_deadline || 'N/A'}</span></div>
+          <div class="detail-row" style="border-bottom: none;"><span class="detail-label">Description:</span><div style="margin-top: 8px;">${desc}</div></div>
+          
+          <!-- CV Match Section -->
+          <div class="cv-match-section">
+            <div class="cv-match-header">
+              <h4>Check Your CV Match</h4>
+            </div>
+            <p style="margin: 0 0 16px 0; color: #666; font-size: 14px;">Upload your CV to see how well you match this position</p>
+            <div class="cv-upload-area">
+              <div class="file-input-wrapper">
+                <label for="cv-upload-${idx}" class="file-input-label" id="cv-label-${idx}">
+                  <span id="cv-icon-${idx}"></span>
+                  <span id="cv-text-${idx}">Choose CV file (PDF or DOCX)</span>
+                </label>
+                <input type="file" id="cv-upload-${idx}" accept=".pdf,.docx" onchange="handleCVUpload(event, ${idx})">
+              </div>
+              <button id="match-btn-${idx}" class="match-button" onclick="analyzeMatch(${idx})" disabled>
+                <span id="match-btn-text-${idx}">Analyze Match</span>
+                <span id="match-btn-loading-${idx}" class="spinner" style="display: none;"></span>
+              </button>
+            </div>
+            <div id="match-result-${idx}" class="match-result"></div>
+          </div>
+
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px;">
+            ${link && link !== 'N/A' ? `<a href="${link}" target="_blank" rel="noopener" class="btn-pill success" style="text-decoration: none;">Apply Now</a>` : '<span style="color: #666;">No link available</span>'}
+          </div>
+        </div>
+      `;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function backToJobsList() {
+      currentJobCV = null; // Reset CV
+      document.getElementById('jobs-list-view').style.display = 'block';
+      document.getElementById('job-detail-view').style.display = 'none';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function loadAssessmentQuestions() {
+      if (assessmentQuestions) return;
+      const r = await makeRequest('assessment-questions');
+      if (!r?.questions) throw new Error('No questions');
+      assessmentQuestions = r.questions;
+      allQuestions = [];
+      if (assessmentQuestions.career_readiness) {
+        assessmentQuestions.career_readiness.forEach(q => allQuestions.push({...q, category: 'career_readiness'}));
+      }
+      if (assessmentQuestions.work_life_balance) {
+        assessmentQuestions.work_life_balance.forEach(q => allQuestions.push({...q, category: 'work_life_balance'}));
+      }
+    }
+
+    async function startAssessment() {
+      const sb = document.getElementById('start-assessment');
+      const st = document.getElementById('start-btn-text');
+      const sl = document.getElementById('start-btn-loading');
+      sb.disabled = true;
+      st.style.display = 'none';
+      sl.style.display = 'inline';
+      try {
+        if (!assessmentQuestions) await loadAssessmentQuestions();
+        if (!allQuestions?.length) {
+          showMessage('Failed to load questions.', 'assessment-results', true);
+          return;
+        }
+        currentQuestionIndex = 0;
+        assessmentResponses = {};
+        document.querySelector('.assessment-intro').style.display = 'none';
+        document.getElementById('assessment-start').style.display = 'none';
+        document.getElementById('assessment-question-view').style.display = 'block';
+        displayCurrentQuestion();
+      } catch (e) {
+        showMessage('Failed to start.', 'assessment-results', true);
+      } finally {
+        sb.disabled = false;
+        st.style.display = 'inline';
+        sl.style.display = 'none';
+      }
+    }
+
+    function displayCurrentQuestion() {
+      if (!allQuestions?.length) return;
+      const q = allQuestions[currentQuestionIndex];
+      const tot = allQuestions.length;
+      const pf = document.getElementById('progress-fill');
+      if (pf) pf.style.width = ((currentQuestionIndex + 1) / tot * 100) + '%';
+      const qc = document.getElementById('question-counter');
+      if (qc) qc.textContent = `Question ${currentQuestionIndex + 1} of ${tot}`;
+      const qt = document.getElementById('current-question-text');
+      if (qt) qt.textContent = q.question;
+      const oc = document.getElementById('current-options');
+      if (oc) {
+        oc.innerHTML = '';
+        Object.entries(q.options).forEach(([k, v]) => {
+          const o = document.createElement('label');
+          o.className = 'option-button';
+          if (assessmentResponses[q.id] === k) o.classList.add('selected');
+          o.innerHTML = `<input type="radio" name="current-question" value="${k}">${v}`;
+          o.addEventListener('click', () => selectOption(q.id, k, o));
+          oc.appendChild(o);
+        });
+      }
+      const pb = document.getElementById('prev-btn');
+      const nb = document.getElementById('next-btn');
+      if (pb) pb.disabled = currentQuestionIndex === 0;
+      if (nb) {
+        if (currentQuestionIndex === tot - 1) {
+          nb.textContent = 'Submit Assessment';
+          nb.disabled = !assessmentResponses[q.id];
+        } else {
+          nb.textContent = 'Next';
+          nb.disabled = !assessmentResponses[q.id];
+        }
+      }
+    }
+
+    function selectOption(qid, val, el) {
+      document.querySelectorAll('.option-button').forEach(b => b.classList.remove('selected'));
+      el.classList.add('selected');
+      assessmentResponses[qid] = val;
+      document.getElementById('next-btn').disabled = false;
+    }
+
+    function nextQuestion() {
+      if (currentQuestionIndex === allQuestions.length - 1) {
+        submitSinglePageAssessment();
+      } else {
+        currentQuestionIndex++;
+        displayCurrentQuestion();
+      }
+    }
+
+    function previousQuestion() {
+      if (currentQuestionIndex > 0) {
+        currentQuestionIndex--;
+        displayCurrentQuestion();
+      }
+    }
+
+    async function submitSinglePageAssessment() {
+      const ld = document.getElementById('loading-assessment');
+      const re = document.getElementById('assessment-results');
+      const resp = { career_readiness: {}, work_life_balance: {} };
+      allQuestions.forEach(q => {
+        if (assessmentResponses[q.id]) resp[q.category][q.id] = assessmentResponses[q.id];
+      });
+      document.getElementById('assessment-question-view').style.display = 'none';
+      ld.style.display = 'block';
+      re.innerHTML = '';
+      try {
+        const r = await makeRequest('momfit-assessment', resp);
+        if (r?.scores && r?.feedback) {
+          displayAssessmentResults(r);
+        } else {
+          showMessage('Unexpected response.', 'assessment-results', true);
+        }
+      } catch (e) {
+        showMessage(`Failed: ${e.message}`, 'assessment-results', true);
+        document.getElementById('assessment-question-view').style.display = 'block';
+      } finally {
+        ld.style.display = 'none';
+      }
+    }
+
+    function displayAssessmentResults(r) {
+      const re = document.getElementById('assessment-results');
+      const s = r.scores || r;
+      const f = r.feedback || "Assessment completed.";
+      const h = `
+        <div class="assessment-results">
+          <h3 style="margin: 0 0 20px 0; color: #f59e0b;">Your MomFit Results</h3>
+          <div class="score-display">
+            <div class="score-item"><div class="score-value">${s.overall || 0}/100</div><div class="score-label">Overall</div></div>
+            <div class="score-item"><div class="score-value">${s.career_readiness || 0}/100</div><div class="score-label">Career Readiness</div></div>
+            <div class="score-item"><div class="score-value">${s.work_life_balance || 0}/100</div><div class="score-label">Work-Life Balance</div></div>
+          </div>
+          <div style="background: white; padding: 20px; border-radius: 12px; margin-top: 20px;">
+            <h4 style="margin: 0 0 16px 0; color: #000;">Feedback</h4>
+            <div style="white-space: pre-wrap; line-height: 1.6; color: #333;">${f}</div>
+          </div>
+          ${r.next_steps ? `<div style="background: #f0f4ff; padding: 16px; border-radius: 12px; margin-top: 20px;"><h4 style="margin: 0 0 12px 0; color: #667eea;">Next Steps</h4><ul style="margin: 0; padding-left: 20px; color: #333;">${r.next_steps.map(st => `<li>${st}</li>`).join('')}</ul></div>` : ''}
+          <div style="margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap;">
+            <button class="btn-pill" onclick="showJobSearch()">Search Jobs</button>
+            <button class="btn-pill" onclick="showLabourLaw()">Labour Law Chat</button>
+            <button class="btn-pill secondary" onclick="goHome()">Back Home</button>
+          </div>
+        </div>
+      `;
+      re.innerHTML = h;
+      re.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      injectWelcomeName();
+      
+      const chatInputInitial = document.getElementById('chat-input-initial');
+      if (chatInputInitial) {
+        chatInputInitial.addEventListener('keypress', function(e) {
+          if (e.key === 'Enter') sendInitialMessage();
+        });
+      }
+      
+      const chatInput = document.getElementById('chat-input');
+      if (chatInput) {
+        chatInput.addEventListener('keypress', function(e) {
+          if (e.key === 'Enter') sendLabourLawQuery();
+        });
+      }
+    });
+    
+    // CV Match Functions
+    function handleCVUpload(event, idx) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      // Validate file type
+      const validTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      if (!validTypes.includes(file.type)) {
+        alert('Please upload a PDF or DOCX file');
+        event.target.value = '';
+        return;
+      }
+
+      // Validate file size (5MB max)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File size must be less than 5MB');
+        event.target.value = '';
+        return;
+      }
+
+      currentJobCV = file;
+      
+      // Update UI
+      const label = document.getElementById(`cv-label-${idx}`);
+      const icon = document.getElementById(`cv-icon-${idx}`);
+      const text = document.getElementById(`cv-text-${idx}`);
+      const btn = document.getElementById(`match-btn-${idx}`);
+      
+      label.classList.add('has-file');
+      icon.textContent = '✓';
+      text.textContent = file.name;
+      btn.disabled = false;
+    }
+
+    async function analyzeMatch(idx) {
+      if (!currentJobCV) return;
+
+      const job = filteredJobs[idx];
+      const btnText = document.getElementById(`match-btn-text-${idx}`);
+      const btnLoading = document.getElementById(`match-btn-loading-${idx}`);
+      const btn = document.getElementById(`match-btn-${idx}`);
+      const resultDiv = document.getElementById(`match-result-${idx}`);
+
+      // Show loading
+      btn.disabled = true;
+      btnText.style.display = 'none';
+      btnLoading.style.display = 'inline-block';
+      resultDiv.classList.remove('show');
+
+      try {
+        // Create FormData with correct parameter names
+        const formData = new FormData();
+        formData.append('file', currentJobCV);
+        formData.append('jobTitle', job.job_title || '');
+        formData.append('company', job.company_name || '');
+        formData.append('jobDescription', job.job_description || job['Job Description (Brief Summary)'] || '');
+
+        // Make request to correct endpoint
+        const response = await fetch(`${API_BASE_URL}/cv-job-match`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: formData
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || errorData.detail || 'Failed to analyze match');
+        }
+
+        const result = await response.json();
+        displayMatchResult(result, idx);
+
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <div style="background: #fee2e2; border-left: 4px solid #ef4444; padding: 16px; border-radius: 8px;">
+            <strong>Error:</strong> ${error.message}
+          </div>
+        `;
+        resultDiv.classList.add('show');
+      } finally {
+        btn.disabled = false;
+        btnText.style.display = 'inline';
+        btnLoading.style.display = 'none';
+      }
+    }
+
+    function displayMatchResult(result, idx) {
+      const resultDiv = document.getElementById(`match-result-${idx}`);
+      
+      const matchScore = result.match_score || 0;
+      let matchColor = '#ef4444'; // red
+      if (matchScore >= 70) matchColor = '#10b981'; // green
+      else if (matchScore >= 50) matchColor = '#f59e0b'; // yellow
+
+      // Parse the AI response to extract sections
+      const aiResponse = result.response || '';
+      
+      resultDiv.innerHTML = `
+        <div class="match-score" style="color: ${matchColor};">${matchScore}%</div>
+        <div class="match-label">MATCH SCORE</div>
+        
+        ${result.ranking ? `
+          <div style="background: #f9fafb; padding: 12px; border-radius: 8px; margin-bottom: 16px; text-align: center;">
+            <strong style="color: #667eea;">Ranking: ${result.ranking}</strong>
+          </div>
+        ` : ''}
+        
+        <div class="match-details">
+          <div style="white-space: pre-wrap; line-height: 1.8; color: #333; font-size: 14px;">
+            ${aiResponse}
+          </div>
+          
+          ${result.breakdown ? `
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 2px solid #e5e7eb;">
+              <h5>Score Breakdown</h5>
+              <div style="display: grid; gap: 8px;">
+                <div style="display: flex; justify-content: space-between; padding: 8px; background: #f9fafb; border-radius: 6px;">
+                  <span style="color: #666;">Keyword Match:</span>
+                  <strong style="color: #333;">${result.breakdown.keyword_match}%</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; background: #f9fafb; border-radius: 6px;">
+                  <span style="color: #666;">Skills Match:</span>
+                  <strong style="color: #333;">${result.breakdown.skills_match}%</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 8px; background: #f9fafb; border-radius: 6px;">
+                  <span style="color: #666;">Experience Match:</span>
+                  <strong style="color: #333;">${result.breakdown.experience_match}%</strong>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        
+        ${result.privacy_protection ? `
+          <div style="margin-top: 12px; padding: 8px 12px; background: #d1fae5; border-radius: 6px; font-size: 13px; color: #065f46;">
+            Privacy Protected: Your personal information was automatically removed
+          </div>
+        ` : ''}
+      `;
+      
+      resultDiv.classList.add('show');
+    }
+
+  </script>
+</body>
+</html>
