@@ -19,3 +19,7 @@ pypdf>=3.17.4
 sentence-transformers>=2.2.2
 gdown>=4.7.1
 requests>=2.31.0
+httpx
+python-dotenv
+sqlalchemy
+psycopg
