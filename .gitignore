@@ -1,32 +1,68 @@
-# Environment variables
-.env
-gcreds.json
-*.json
-!package.json
-!render.yaml
+# HTML files
+aibot.html
+aibot2.html
 
-# Exclude large vectorstore files
-vectorstore/
-*.pkl
-labour_laws/
+# Data files
+jobs.csv
 
-# Python
+# Python virtual environment
+pyenv.cfg
+
+# Additional common Python ignores
 __pycache__/
 *.py[cod]
 *$py.class
-venv/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# VS Code
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
 
 # Logs
 *.log
+logs/
 
-# Local development
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# OS
 .DS_Store
-
-vectorstore/
-*.pkl
-aibot.html
-aibot2.html
-jobs.csv
+Thumbs.db
