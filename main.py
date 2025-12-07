@@ -137,11 +137,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:8000",
-        "https://dragonfly-chihuahua-alhg.squarespace.com/",
-        "https://ai-chatbot-4bqx.onrender.com/",
-        "http://localhost:8501",
-        "*"
+        "https://dragonfly-chihuahua-alhg.squarespace.com",
+        "https://ai-chatbot-4bqx.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
