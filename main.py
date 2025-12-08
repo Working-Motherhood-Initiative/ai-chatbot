@@ -11,8 +11,6 @@ import httpx
 import json
 import hmac
 import hashlib
-
-# Database imports
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -39,7 +37,6 @@ from assessment_questions import (
     validate_responses
 )
 
-# ==================== SETUP ====================
 
 load_dotenv = __import__('dotenv').load_dotenv
 load_dotenv()
@@ -132,7 +129,6 @@ def get_db():
     finally:
         db.close()
 
-# ==================== FASTAPI APP ====================
 
 app = FastAPI(
     title="Motherboard Career Assistant API", 
@@ -153,7 +149,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================== PAYSTACK CONFIG ====================
 
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
@@ -164,7 +159,6 @@ paystack_headers = {
     "Content-Type": "application/json"
 }
 
-# ==================== DEPENDENCIES ====================
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_TOKEN:
@@ -195,14 +189,12 @@ async def verify_session(
     
     return session_id
 
-# ==================== UTILITY FUNCTIONS ====================
 
 def validate_email(email: str) -> str:
     if not email or '@' not in email or '.' not in email:
         raise ValueError('Invalid email format')
     return email.lower().strip()
 
-# ==================== STARTUP EVENTS ====================
 
 @app.on_event("startup")
 async def startup_event():
@@ -222,16 +214,13 @@ async def startup_event():
         logger.error(f"Startup error: {e}")
         raise
 
-# ==================== PUBLIC ENDPOINTS ====================
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
     return {"message": "Motherboard Career Assistant API", "version": "2.0.0", "status": "running"}
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
-    """Health check"""
     try:
         db.execute(text("SELECT 1"))
         return {"status": "ok", "database": "connected", "version": "2.0.0"}
@@ -240,18 +229,16 @@ async def health_check(db: Session = Depends(get_db)):
 
 @app.get("/init-status")
 async def initialization_status():
-    """Check initialization status"""
     return JSONResponse({
         "initialization_complete": _initialization_complete,
         "error": _initialization_error,
         "timestamp": datetime.now().isoformat()
     })
 
-# ==================== SESSION MANAGEMENT ====================
+# SESSION MANAGEMENT 
 
 @app.post("/create-session")
 async def create_session():
-    """Create a new session"""
     session_id = session_store.create_session()
     return {
         "session_id": session_id,
@@ -259,11 +246,10 @@ async def create_session():
         "message": "Session created successfully"
     }
 
-# ==================== PAYMENT API ENDPOINTS ====================
+#PAYMENT API ENDPOINTS
 
 @app.post("/api/customers")
 async def create_customer(request: Request, db: Session = Depends(get_db)):
-    """Create a Paystack customer"""
     try:
         data = await request.json()
         email = data.get('email', '').strip()
@@ -276,23 +262,8 @@ async def create_customer(request: Request, db: Session = Depends(get_db)):
         validate_email(email)
 
         existing_user = db.query(User).filter(User.email == email).first()
-        
-        # If user exists, update their info (allow re-subscription)
         if existing_user:
-            existing_user.first_name = first_name
-            existing_user.last_name = last_name
-            existing_user.updated_at = datetime.utcnow()
-            db.commit()
-            db.refresh(existing_user)
-            
-            return {
-                "status": "success",
-                "message": "Customer updated successfully",
-                "data": {
-                    "email": email,
-                    "customer_code": existing_user.paystack_customer_code
-                }
-            }
+            raise HTTPException(status_code=400, detail="Customer already exists")
 
         async with httpx.AsyncClient() as client:
             payload = {
@@ -317,15 +288,24 @@ async def create_customer(request: Request, db: Session = Depends(get_db)):
 
             paystack_customer = response.json().get("data")
 
-            # DON'T save to DB yet - wait for payment verification
-            # Return Paystack customer info for next steps
+            db_user = User(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                paystack_customer_code=paystack_customer.get("customer_code"),
+                paystack_customer_id=paystack_customer.get("id"),
+                subscription_active=False
+            )
+            db.add(db_user)
+            db.commit()
+            db.refresh(db_user)
+
             return {
                 "status": "success",
-                "message": "Customer registered on Paystack - proceed to payment",
+                "message": "Customer created successfully",
                 "data": {
                     "email": email,
-                    "customer_code": paystack_customer.get("customer_code"),
-                    "customer_id": paystack_customer.get("id")
+                    "customer_code": paystack_customer.get("customer_code")
                 }
             }
 
@@ -337,7 +317,6 @@ async def create_customer(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/api/initialize-payment")
 async def initialize_payment(request: Request, db: Session = Depends(get_db)):
-    """Initialize a payment"""
     try:
         data = await request.json()
         email = data.get('email', '').strip()
@@ -345,8 +324,9 @@ async def initialize_payment(request: Request, db: Session = Depends(get_db)):
         if not email:
             raise HTTPException(status_code=400, detail="email is required")
 
-        validate_email(email)
-        # Don't check if user exists - they'll be created after payment verification
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Customer not found. Create customer first.")
 
         async with httpx.AsyncClient() as client:
             payload = {
@@ -388,7 +368,6 @@ async def initialize_payment(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/api/verify-payment")
 async def verify_payment(request: Request, db: Session = Depends(get_db)):
-    """Verify a payment"""
     try:
         data = await request.json()
         reference = data.get('reference', '').strip()
@@ -417,29 +396,15 @@ async def verify_payment(request: Request, db: Session = Depends(get_db)):
             customer_email = transaction["customer"]["email"]
             authorization_data = transaction.get("authorization") or {}
             amount = transaction.get("amount")
-            customer_data = transaction.get("customer") or {}
 
-            # CREATE USER HERE - AFTER payment verified (not before)
             user = db.query(User).filter(User.email == customer_email).first()
-            if not user:
-                # First time payment - create user now
-                user = User(
-                    email=customer_email,
-                    first_name=customer_data.get("first_name", ""),
-                    last_name=customer_data.get("last_name", ""),
-                    paystack_customer_code=customer_data.get("customer_code"),
-                    paystack_customer_id=customer_data.get("id"),
-                    subscription_active=False
-                )
-                db.add(user)
-            
-            # Update authorization code from successful payment
-            auth_code = authorization_data.get("authorization_code")
-            if auth_code:
-                user.authorization_code = auth_code
-                user.first_authorization = True
-            user.updated_at = datetime.utcnow()
-            db.commit()
+            if user:
+                auth_code = authorization_data.get("authorization_code")
+                if auth_code:
+                    user.authorization_code = auth_code
+                    user.first_authorization = True
+                    user.updated_at = datetime.utcnow()
+                    db.commit()
 
             payment_log = PaymentLog(
                 email=customer_email,
@@ -470,7 +435,6 @@ async def verify_payment(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/api/create-subscription")
 async def create_subscription(request: Request, db: Session = Depends(get_db)):
-    """Create a subscription"""
     try:
         data = await request.json()
         email = data.get('email', '').strip()
@@ -550,7 +514,6 @@ async def create_subscription(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/subscription-status/{email}")
 async def check_subscription_status(email: str, db: Session = Depends(get_db)):
-    """Check subscription status"""
     user = db.query(User).filter(User.email == email.lower()).first()
 
     if not user:
@@ -572,7 +535,6 @@ async def check_subscription_status(email: str, db: Session = Depends(get_db)):
 
 @app.post("/api/cancel-subscription/{email}")
 async def cancel_subscription(email: str, db: Session = Depends(get_db)):
-    """Cancel a subscription"""
     try:
         if not email:
             raise HTTPException(status_code=400, detail="email is required")
@@ -634,7 +596,6 @@ async def cancel_subscription(email: str, db: Session = Depends(get_db)):
 
 @app.post("/api/webhooks/paystack")
 async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
-    """Paystack webhook"""
     try:
         raw_body = await request.body()
         payload = json.loads(raw_body)
@@ -706,7 +667,6 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/admin/customers")
 async def get_all_customers(db: Session = Depends(get_db)):
-    """Get all customers"""
     users = db.query(User).all()
 
     customers = [
@@ -725,14 +685,10 @@ async def get_all_customers(db: Session = Depends(get_db)):
         "customers": customers
     }
 
-# ==================== CAREER API ENDPOINTS ====================
-# Include all your existing career API endpoints here
-# (welcome, search-jobs, cv-job-match, momfit-assessment, labour-law-query, etc.)
-# They stay EXACTLY the same as before - no changes needed!
+# CAREER API ENDPOINTS 
 
 @app.get("/api-info")
 async def api_info():
-    """Get API information and available endpoints"""
     return JSONResponse({
         "api_name": "Motherboard Career Assistant API",
         "version": "2.0.0",
@@ -767,7 +723,6 @@ async def api_info():
 
 @app.post("/welcome")
 async def welcome_user(request: Request, session: str = Depends(verify_session)):
-    """Welcome and onboard new users"""
     try:
         data = await request.json()
     except Exception:
@@ -785,7 +740,6 @@ async def welcome_user(request: Request, session: str = Depends(verify_session))
 
 @app.get("/jobs")
 async def get_all_available_jobs(session: str = Depends(verify_session)):
-    """Get all available jobs"""
     try:
         jobs = get_all_jobs()
         logger.info(f"Fetching all {len(jobs)} available jobs")
@@ -851,7 +805,6 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
 
 @app.post("/search-jobs")
 async def search_jobs(request: Request, session: str = Depends(verify_session)):
-    """Search for jobs based on query and filters"""
     try:
         data = await request.json()
         user_query = data.get("query", "")
@@ -948,7 +901,6 @@ async def analyze_cv_job_match_hybrid_endpoint(
     jobDescription: str = Form(...),
     session: str = Depends(verify_session)
 ):
-    """Analyze CV match against a job posting (Privacy Protected)"""
     try:
         validate_file_size(file)
         
@@ -1004,7 +956,6 @@ async def analyze_cv_job_match_hybrid_endpoint(
 
 @app.get("/assessment-questions")
 async def get_assessment_questions(session: str = Depends(verify_session)):
-    """Get all assessment questions"""
     try:
         return JSONResponse({
             "assessment_sections": {
@@ -1029,7 +980,6 @@ async def get_assessment_questions(session: str = Depends(verify_session)):
 
 @app.post("/momfit-assessment")
 async def momfit_assessment(request: Request, session: str = Depends(verify_session)):
-    """Take MomFit career assessment"""
     try:
         data = await request.json()
         responses = data.get("responses", {})
@@ -1067,7 +1017,6 @@ async def momfit_assessment(request: Request, session: str = Depends(verify_sess
 
 @app.get("/assessment-stats")
 async def assessment_statistics(session: str = Depends(verify_session)):
-    """Get assessment statistics"""
     try:
         return JSONResponse({
             "assessment_stats": {
@@ -1093,7 +1042,6 @@ async def assessment_statistics(session: str = Depends(verify_session)):
 
 @app.post("/labour-law-query")
 async def labour_law_query(request_data: LabourLawQuery, session: str = Depends(verify_session)):
-    """Query labour law information across African countries"""
     try:
         rag = get_rag_instance()
 
@@ -1164,7 +1112,6 @@ async def labour_law_query(request_data: LabourLawQuery, session: str = Depends(
 
 @app.get("/labour-law-countries")
 async def get_labour_law_countries(session: str = Depends(verify_session)):
-    """Get list of supported countries for labour law queries"""
     try:
         rag = get_rag_instance()
         countries = rag.get_supported_countries()
@@ -1193,7 +1140,6 @@ async def get_labour_law_countries(session: str = Depends(verify_session)):
 
 @app.post("/feedback")
 async def submit_feedback(request: Request, session: str = Depends(verify_session)):
-    """Submit feedback about the platform"""
     try:
         data = await request.json()
         
@@ -1221,7 +1167,6 @@ async def submit_feedback(request: Request, session: str = Depends(verify_sessio
 
 @app.post("/admin/reload-vectorstore")
 async def admin_reload_vectorstore(token: str = Depends(verify_token)):
-    """Admin endpoint - reload vectorstore"""
     try:
         logger.info("Admin: Manual vectorstore reload initiated...")
         
@@ -1245,7 +1190,6 @@ async def admin_reload_vectorstore(token: str = Depends(verify_token)):
             }
         )
 
-# ==================== EXCEPTION HANDLERS ====================
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -1272,12 +1216,10 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ==================== MAIN ====================
-
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Motherboard Career Assistant API (v2)...")
     logger.info("Features: Career Guidance + Payment Management")
     logger.info("Privacy Protection: ENABLED")
     logger.info("Session Management: ENABLED")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
