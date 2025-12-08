@@ -12,10 +12,12 @@ import json
 import hmac
 import hashlib
 
+# Database imports
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
+# Career API imports
 from schemas import LabourLawQuery, AssessmentResponse
 from session_manager import SessionStore
 from privacy_protection import remove_personal_info_from_cv, log_privacy_protection
@@ -37,19 +39,25 @@ from assessment_questions import (
     validate_responses
 )
 
+# ==================== SETUP ====================
 
 load_dotenv = __import__('dotenv').load_dotenv
 load_dotenv()
 
+# Setup logging
 logger = setup_logging()
 
+# Initialize session store
 session_store = SessionStore()
 
+# Setup security
 security = HTTPBearer()
 API_TOKEN = load_environment()
 
+# Initialize OpenAI client
 openai_client = initialize_openai_client()
 
+# ==================== DATABASE SETUP ====================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -70,6 +78,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# ==================== DATABASE MODELS ====================
 
 class User(Base):
     __tablename__ = "users"
@@ -123,6 +132,7 @@ def get_db():
     finally:
         db.close()
 
+# ==================== FASTAPI APP ====================
 
 app = FastAPI(
     title="Motherboard Career Assistant API", 
@@ -143,6 +153,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ==================== PAYSTACK CONFIG ====================
 
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
@@ -153,6 +164,7 @@ paystack_headers = {
     "Content-Type": "application/json"
 }
 
+# ==================== DEPENDENCIES ====================
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_TOKEN:
@@ -183,12 +195,14 @@ async def verify_session(
     
     return session_id
 
+# ==================== UTILITY FUNCTIONS ====================
 
 def validate_email(email: str) -> str:
     if not email or '@' not in email or '.' not in email:
         raise ValueError('Invalid email format')
     return email.lower().strip()
 
+# ==================== STARTUP EVENTS ====================
 
 @app.on_event("startup")
 async def startup_event():
@@ -208,6 +222,7 @@ async def startup_event():
         logger.error(f"Startup error: {e}")
         raise
 
+# ==================== PUBLIC ENDPOINTS ====================
 
 @app.get("/")
 async def root():
@@ -232,6 +247,7 @@ async def initialization_status():
         "timestamp": datetime.now().isoformat()
     })
 
+# ==================== SESSION MANAGEMENT ====================
 
 @app.post("/create-session")
 async def create_session():
@@ -243,6 +259,7 @@ async def create_session():
         "message": "Session created successfully"
     }
 
+# ==================== PAYMENT API ENDPOINTS ====================
 
 @app.post("/api/customers")
 async def create_customer(request: Request, db: Session = Depends(get_db)):
@@ -328,9 +345,8 @@ async def initialize_payment(request: Request, db: Session = Depends(get_db)):
         if not email:
             raise HTTPException(status_code=400, detail="email is required")
 
-        user = db.query(User).filter(User.email == email).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="Customer not found. Create customer first.")
+        validate_email(email)
+        # Don't check if user exists - they'll be created after payment verification
 
         async with httpx.AsyncClient() as client:
             payload = {
@@ -1255,6 +1271,8 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
     )
 
+
+# ==================== MAIN ====================
 
 if __name__ == "__main__":
     import uvicorn
