@@ -377,42 +377,51 @@ SCORING_WEIGHTS = {
     }
 }
 
-def calculate_assessment_scores(responses: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
-   #Calculate career readiness score
+def calculate_assessment_scores(responses: Dict[str, str]) -> Dict[str, Any]:
+    """Calculate career readiness and work-life balance scores from flat responses"""
+    
     career_total = 0
     career_count = 0
-    for q_id, response in responses.get("career_readiness", {}).items():
-        if q_id in SCORING_WEIGHTS["career_readiness"]:
-            score = SCORING_WEIGHTS["career_readiness"][q_id].get(response, 0)
-            career_total += score
-            career_count += 1
-    
-    # Calculate work-life balance score
     balance_total = 0
     balance_count = 0
-    for q_id, response in responses.get("work_life_balance", {}).items():
-        if q_id in SCORING_WEIGHTS["work_life_balance"]:
-            score = SCORING_WEIGHTS["work_life_balance"][q_id].get(response, 0)
+    
+    # Iterate through all responses
+    for q_id, response in responses.items():
+        # Find which section this question belongs to
+        question_data = None
+        section = None
+        
+        for sec in ["career_readiness", "work_life_balance"]:
+            for q in ASSESSMENT_QUESTIONS[sec]:
+                if q["id"] == q_id:
+                    question_data = q
+                    section = sec
+                    break
+        
+        if not question_data or q_id not in SCORING_WEIGHTS[section]:
+            continue
+        
+        score = SCORING_WEIGHTS[section][q_id].get(response, 0)
+        
+        if section == "career_readiness":
+            career_total += score
+            career_count += 1
+        else:
             balance_total += score
             balance_count += 1
     
-    # Convert to percentage scores (1-5 scale to 0-100)
+    # Convert to percentage (1-5 scale to 0-100)
     career_score = round((career_total / max(career_count, 1)) * 20) if career_count > 0 else 0
     balance_score = round((balance_total / max(balance_count, 1)) * 20) if balance_count > 0 else 0
     overall_score = round((career_score + balance_score) / 2)
     
     return {
+        "career_readiness": career_score,
         "career_readiness_score": career_score,
+        "work_life_balance": balance_score,
         "work_life_balance_score": balance_score,
-        "overall_score": overall_score,
-        "career_responses": responses.get("career_readiness", {}),
-        "balance_responses": responses.get("work_life_balance", {}),
-        "raw_scores": {
-            "career_total": career_total,
-            "career_count": career_count,
-            "balance_total": balance_total,
-            "balance_count": balance_count
-        }
+        "overall": overall_score,
+        "overall_score": overall_score
     }
 
 def generate_assessment_feedback(scores: Dict[str, Any]) -> str:
@@ -512,42 +521,34 @@ def get_assessment_instructions() -> Dict[str, str]:
         "general": "This assessment takes about 5-7 minutes to complete. Answer based on your current situation and feelings, not where you think you should be."
     }
 
-def validate_responses(responses: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+def validate_responses(responses: Dict[str, str]) -> Dict[str, Any]:
+    """Validate that all required questions have responses - expects flat structure"""
+    
     if not responses:
         return {"valid": False, "error": "No responses provided"}
     
-    if "career_readiness" not in responses or "work_life_balance" not in responses:
-        return {"valid": False, "error": "Both career readiness and work-life balance responses are required"}
+    # Count total questions answered
+    total_answered = len(responses)
+    total_required = len(ASSESSMENT_QUESTIONS["career_readiness"]) + len(ASSESSMENT_QUESTIONS["work_life_balance"])
     
-    career_responses = responses.get("career_readiness", {})
-    balance_responses = responses.get("work_life_balance", {})
+    if total_answered < total_required:
+        return {"valid": False, "error": f"Expected {total_required} responses, got {total_answered}"}
     
-    expected_career_questions = len(ASSESSMENT_QUESTIONS["career_readiness"])
-    expected_balance_questions = len(ASSESSMENT_QUESTIONS["work_life_balance"])
+    # Validate each response is valid
+    all_question_ids = {}
+    for section in ASSESSMENT_QUESTIONS:
+        for question in ASSESSMENT_QUESTIONS[section]:
+            all_question_ids[question["id"]] = question
     
-    if len(career_responses) != expected_career_questions:
-        return {"valid": False, "error": f"Expected {expected_career_questions} career readiness responses, got {len(career_responses)}"}
+    for q_id, response in responses.items():
+        if q_id not in all_question_ids:
+            return {"valid": False, "error": f"Unknown question ID: {q_id}"}
+        
+        question = all_question_ids[q_id]
+        if response not in question["options"]:
+            return {"valid": False, "error": f"Invalid response '{response}' for question '{q_id}'"}
     
-    if len(balance_responses) != expected_balance_questions:
-        return {"valid": False, "error": f"Expected {expected_balance_questions} work-life balance responses, got {len(balance_responses)}"}
-    
-    for section_name, section_responses in responses.items():
-        if section_name not in ASSESSMENT_QUESTIONS:
-            continue
-            
-        for q_id, response in section_responses.items():
-            question_found = False
-            for question in ASSESSMENT_QUESTIONS[section_name]:
-                if question["id"] == q_id:
-                    question_found = True
-                    if response not in question["options"]:
-                        return {"valid": False, "error": f"Invalid response '{response}' for question '{q_id}'"}
-                    break
-            
-            if not question_found:
-                return {"valid": False, "error": f"Unknown question ID: '{q_id}'"}
-    
-    return {"valid": True, "error": ""}  # SUCCESS
+    return {"valid": True, "error": ""}
 
 # Helper function to get question by ID
 def get_question_by_id(section: str, question_id: str) -> Dict[str, Any]:
