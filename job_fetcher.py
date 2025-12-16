@@ -4,6 +4,7 @@ import numpy as np
 import openai
 import logging
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,11 +16,81 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Global storage for jobs
 jobs_data = []
 
-def get_all_jobs():
-    """Load jobs from your sheet or database."""
+def is_deadline_expired(deadline_str):
+    """
+    Check if a job posting deadline has expired.
+    
+    Supports multiple date formats:
+    - "2025-12-31"
+    - "12/31/2025"
+    - "31-12-2025"
+    - "Dec 31, 2025"
+    
+    Returns: True if expired, False if still active
+    """
+    if not deadline_str or deadline_str.strip() == "":
+        # If no deadline specified, assume job is still active
+        logger.info("No deadline specified - treating as active posting")
+        return False
+    
+    deadline_str = str(deadline_str).strip()
+    today = datetime.now().date()
+    
+    # Try different date formats
+    date_formats = [
+        "%Y-%m-%d",      # 2025-12-31
+        "%m/%d/%Y",      # 12/31/2025
+        "%d-%m-%Y",      # 31-12-2025
+        "%d/%m/%Y",      # 31/12/2025
+        "%B %d, %Y",     # December 31, 2025
+        "%b %d, %Y",     # Dec 31, 2025
+        "%Y/%m/%d",      # 2025/12/31
+        "%d.%m.%Y",      # 31.12.2025
+    ]
+    
+    for date_format in date_formats:
+        try:
+            deadline_date = datetime.strptime(deadline_str, date_format).date()
+            is_expired = deadline_date < today
+            
+            if is_expired:
+                logger.info(f"Job deadline {deadline_date} has expired (today: {today})")
+            else:
+                days_left = (deadline_date - today).days
+                logger.info(f"Job deadline {deadline_date} is active ({days_left} days left)")
+            
+            return is_expired
+        except ValueError:
+            continue
+    
+    # If no format matched, log warning but don't filter out
+    logger.warning(f"Could not parse deadline format: {deadline_str}")
+    return False
+
+
+def get_all_jobs(exclude_expired=True):
+    """
+    Load jobs from storage.
+    
+    Args:
+        exclude_expired: If True, filters out jobs with expired deadlines
+    
+    Returns: List of jobs (with expired ones removed if exclude_expired=True)
+    """
     global jobs_data
-    logger.info(f"Returning {len(jobs_data)} jobs from storage")
-    return jobs_data
+    
+    if exclude_expired:
+        # Filter out expired jobs
+        active_jobs = [
+            job for job in jobs_data 
+            if not is_deadline_expired(job.get("Application Deadline", ""))
+        ]
+        logger.info(f"Returning {len(active_jobs)} active jobs (excluded {len(jobs_data) - len(active_jobs)} expired)")
+        return active_jobs
+    else:
+        logger.info(f"Returning all {len(jobs_data)} jobs (including expired)")
+        return jobs_data
+
 
 def preload_job_embeddings():
     """Load jobs and precompute embeddings for semantic search."""
@@ -41,7 +112,16 @@ def preload_job_embeddings():
 
         df["embedding"] = embeddings
         jobs_data = df.to_dict(orient="records")
-        logger.info("Successfully created embeddings and stored jobs data")
+        
+        # Log deadline info
+        total_jobs = len(jobs_data)
+        expired_count = sum(1 for job in jobs_data if is_deadline_expired(job.get("Application Deadline", "")))
+        active_count = total_jobs - expired_count
+        
+        logger.info(f"Successfully loaded {total_jobs} jobs")
+        logger.info(f"  - Active jobs: {active_count}")
+        logger.info(f"  - Expired jobs: {expired_count}")
+        
     except Exception as e:
         logger.error(f"Error in preload_job_embeddings: {e}")
         raise
@@ -139,10 +219,23 @@ def extract_keywords_from_query(user_query):
         logger.error(f"Error extracting keywords: {e}")
         return []
 
-def find_jobs_from_sentence(user_query):
-    """Enhanced hybrid job search with weighted scoring."""
+def find_jobs_from_sentence(user_query, exclude_expired=True):
+    """
+    Enhanced hybrid job search with weighted scoring.
+    
+    Args:
+        user_query: Search query from user
+        exclude_expired: If True, excludes jobs with expired deadlines
+    
+    Returns: Top 5 matching jobs (excluding expired if requested)
+    """
     filters = extract_filters(user_query)
-    jobs = get_all_jobs()
+    jobs = get_all_jobs(exclude_expired=exclude_expired)  # Filter expired jobs here
+    
+    if not jobs:
+        logger.warning("No active jobs available after filtering")
+        return []
+    
     query_embedding = embed_text(user_query)
 
     results = []

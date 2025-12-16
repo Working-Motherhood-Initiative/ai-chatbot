@@ -14,7 +14,7 @@ import hashlib
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-
+from feedback_generator import CareerFeedbackGenerator
 # Career API imports
 from schemas import LabourLawQuery, AssessmentResponse
 from session_manager import SessionStore
@@ -47,12 +47,14 @@ logger = setup_logging()
 # Initialize session store
 session_store = SessionStore()
 
+
 # Setup security
 security = HTTPBearer()
 API_TOKEN = load_environment()
 
 # Initialize OpenAI client
 openai_client = initialize_openai_client()
+feedback_generator = CareerFeedbackGenerator(openai_client)
 
 # ==================== DATABASE SETUP ====================
 
@@ -919,32 +921,41 @@ async def analyze_cv_job_match_hybrid_endpoint(
         
         logger.info(f"Analyzing CV for job: {jobTitle} at {company}")
         
+        # Calculate match using your existing analyzer
         match_result = calculate_cv_job_match_hybrid(cleaned_cv, jobDescription, jobTitle)
         ranking = get_match_ranking(match_result["overall_match"])
         
+        
+        feedback_gen = CareerFeedbackGenerator(openai_client)
+        simple_feedback = feedback_gen.generate_detailed_feedback(
+            match_result=match_result,
+            job_title=jobTitle,
+            company=company,
+            cv_content=cleaned_cv,
+            job_description=jobDescription
+        )
+        
+        # Return CLEAN, SIMPLE response
         return JSONResponse({
             "status": "success",
-            "overall_match_percentage": match_result["overall_match"],
-            "match_level": ranking["level"],
+            
+            # Match percentage and level
+            "overall_match_percentage": simple_feedback["match_percentage"],
+            "match_level": simple_feedback["match_level"],
             "match_color": ranking["color"],
-            "match_description": ranking["description"],
-            "breakdown": {
-                "keyword_match": match_result["breakdown"]["keyword_match"],
-                "skills_match": match_result["breakdown"]["skills_match"],
-                "experience_match": match_result["breakdown"]["experience_match"],
-                "semantic_similarity": match_result["breakdown"]["semantic_similarity"]
-            },
-            "strengths": match_result["strengths"],
-            "missing_keywords": match_result["missing_keywords"],
+            
+            # MAIN CONTENT - Two paragraphs
+            "strengths": simple_feedback["strengths"],
+            "improvements": simple_feedback["improvements"],
+            
+            # Detailed scores breakdown
+            "scores": simple_feedback["scores"],
+            
+            # Privacy info
             "privacy_protection": {
                 "status": privacy_validation["privacy_check_passed"],
                 "reduction_percentage": privacy_validation["statistics"]["reduction_percentage"]
-            },
-            "recommendations": [
-                "Add any missing keywords to your CV",
-                "Highlight relevant experience",
-                "Emphasize key skills from the job description"
-            ]
+            }
         })
         
     except HTTPException:
@@ -952,6 +963,10 @@ async def analyze_cv_job_match_hybrid_endpoint(
     except Exception as e:
         logger.error(f"CV analysis error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error analyzing CV: {str(e)}")
+
+
+
+
 
 
 @app.get("/assessment-questions")

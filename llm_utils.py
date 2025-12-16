@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 def get_ai_response(openai_client, messages: List[Dict], max_tokens: int = 500) -> str:
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=messages,
             temperature=0.7,
             max_tokens=max_tokens
