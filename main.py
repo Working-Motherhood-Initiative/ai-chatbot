@@ -15,7 +15,6 @@ from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Integer
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from feedback_generator import CareerFeedbackGenerator
-# Career API imports
 from schemas import LabourLawQuery, AssessmentResponse
 from session_manager import SessionStore
 from privacy_protection import remove_personal_info_from_cv, log_privacy_protection
@@ -41,22 +40,17 @@ from assessment_questions import (
 load_dotenv = __import__('dotenv').load_dotenv
 load_dotenv()
 
-# Setup logging
 logger = setup_logging()
 
-# Initialize session store
 session_store = SessionStore()
 
 
-# Setup security
 security = HTTPBearer()
 API_TOKEN = load_environment()
 
-# Initialize OpenAI client
 openai_client = initialize_openai_client()
 feedback_generator = CareerFeedbackGenerator(openai_client)
 
-# ==================== DATABASE SETUP ====================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -77,7 +71,6 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# ==================== DATABASE MODELS ====================
 
 class User(Base):
     __tablename__ = "users"
@@ -201,12 +194,10 @@ def validate_email(email: str) -> str:
 @app.on_event("startup")
 async def startup_event():
     try:
-        # Test privacy protection
         test_privacy_protection(remove_personal_info_from_cv)
         logger.info("API server starting...")
         logger.info("Session management initialized")
         
-        # Start session cleanup
         asyncio.create_task(cleanup_sessions_periodically(session_store))
         
         logger.info("Running heavy initialization in background thread...")
@@ -236,8 +227,7 @@ async def initialization_status():
         "error": _initialization_error,
         "timestamp": datetime.now().isoformat()
     })
-
-# SESSION MANAGEMENT 
+ 
 
 @app.post("/create-session")
 async def create_session():
@@ -967,12 +957,11 @@ async def analyze_cv_job_match_hybrid_endpoint(
 
 
 
-
-
 @app.get("/assessment-questions")
 async def get_assessment_questions(session: str = Depends(verify_session)):
     try:
         return JSONResponse({
+            "questions": ASSESSMENT_QUESTIONS,
             "assessment_sections": {
                 "career_readiness": {
                     "title": "Career Readiness Assessment",
