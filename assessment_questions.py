@@ -512,46 +512,42 @@ def get_assessment_instructions() -> Dict[str, str]:
         "general": "This assessment takes about 5-7 minutes to complete. Answer based on your current situation and feelings, not where you think you should be."
     }
 
-# Validation functions
-def validate_responses(responses: Dict[str, Dict[str, str]]) -> tuple[bool, str]:
+def validate_responses(responses: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
     if not responses:
-        return False, "No responses provided"
+        return {"valid": False, "error": "No responses provided"}
     
     if "career_readiness" not in responses or "work_life_balance" not in responses:
-        return False, "Both career readiness and work-life balance responses are required"
+        return {"valid": False, "error": "Both career readiness and work-life balance responses are required"}
     
     career_responses = responses.get("career_readiness", {})
     balance_responses = responses.get("work_life_balance", {})
     
-    # Check if we have the expected number of questions
     expected_career_questions = len(ASSESSMENT_QUESTIONS["career_readiness"])
     expected_balance_questions = len(ASSESSMENT_QUESTIONS["work_life_balance"])
     
     if len(career_responses) != expected_career_questions:
-        return False, f"Expected {expected_career_questions} career readiness responses, got {len(career_responses)}"
+        return {"valid": False, "error": f"Expected {expected_career_questions} career readiness responses, got {len(career_responses)}"}
     
     if len(balance_responses) != expected_balance_questions:
-        return False, f"Expected {expected_balance_questions} work-life balance responses, got {len(balance_responses)}"
+        return {"valid": False, "error": f"Expected {expected_balance_questions} work-life balance responses, got {len(balance_responses)}"}
     
-    # Validate individual responses
     for section_name, section_responses in responses.items():
         if section_name not in ASSESSMENT_QUESTIONS:
             continue
             
         for q_id, response in section_responses.items():
-            # Find the question
             question_found = False
             for question in ASSESSMENT_QUESTIONS[section_name]:
                 if question["id"] == q_id:
                     question_found = True
                     if response not in question["options"]:
-                        return False, f"Invalid response '{response}' for question '{q_id}'"
+                        return {"valid": False, "error": f"Invalid response '{response}' for question '{q_id}'"}
                     break
             
             if not question_found:
-                return False, f"Unknown question ID: '{q_id}'"
+                return {"valid": False, "error": f"Unknown question ID: '{q_id}'"}
     
-    return True, "Valid responses"
+    return {"valid": True, "error": ""}  # SUCCESS
 
 # Helper function to get question by ID
 def get_question_by_id(section: str, question_id: str) -> Dict[str, Any]:
