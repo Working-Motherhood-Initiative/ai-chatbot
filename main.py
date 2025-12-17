@@ -136,16 +136,14 @@ app.add_middleware(
     allow_origins=[
         "https://dragonfly-chihuahua-alhg.squarespace.com",
         "https://ai-chatbot-4bqx.onrender.com",
-        "https://workingmotherhoodinitiative.org/",
-        "https://workingmotherhoodinitiative.org/ai-chatbot",
-        "https://workingmotherhoodinitiative.org/payments",
-        "127.0.0.1",
+        "https://workingmotherhoodinitiative.org",  
+        "localhost",
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
