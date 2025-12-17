@@ -136,8 +136,9 @@ app.add_middleware(
     allow_origins=[
         "https://dragonfly-chihuahua-alhg.squarespace.com",
         "https://ai-chatbot-4bqx.onrender.com",
-        "https://workingmotherhoodinitiative.org/"
-        "localhost",
+        "https://workingmotherhoodinitiative.org/",
+        "https://workingmotherhoodinitiative.org/ai-chatbot",
+        "https://workingmotherhoodinitiative.org/payments",
         "127.0.0.1",
     ],
     allow_credentials=True,
