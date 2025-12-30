@@ -4,7 +4,6 @@ import threading
 import asyncio
 from dotenv import load_dotenv
 import openai
-from job_fetcher import preload_job_embeddings, get_all_jobs
 from labour_law_rag import initialize_rag_system, get_rag_instance
 
 logger = logging.getLogger(__name__)
@@ -38,10 +37,7 @@ def initialize_background():
     try:
         logger.info("Background initialization started...")
         
-        logger.info("Starting job data initialization...")
-        preload_job_embeddings()
-        jobs = get_all_jobs()
-        logger.info(f"Successfully loaded {len(jobs)} jobs")
+        logger.info("Job system ready - will load from Google Sheet on demand")
         
         logger.info("Initializing Labour Law RAG system...")
         try:

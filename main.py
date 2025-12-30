@@ -203,6 +203,8 @@ async def startup_event():
         logger.info("Running heavy initialization in background thread...")
         start_background_initialization()
         
+        logger.info("Job system ready - will load from Google Sheet on demand")
+        
     except Exception as e:
         logger.error(f"Startup error: {e}")
         raise
@@ -733,7 +735,7 @@ async def welcome_user(request: Request, session: str = Depends(verify_session))
 @app.get("/jobs")
 async def get_all_available_jobs(session: str = Depends(verify_session)):
     try:
-        jobs = get_all_jobs()
+        jobs = get_all_jobs()  # This now loads fresh from Google Sheet each time
         logger.info(f"Fetching all {len(jobs)} available jobs")
         
         complete_jobs = []
@@ -793,7 +795,6 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
             status_code=500,
             content={"error": "Failed to fetch jobs", "details": str(e)}
         )
-
 
 @app.post("/search-jobs")
 async def search_jobs(request: Request, session: str = Depends(verify_session)):
