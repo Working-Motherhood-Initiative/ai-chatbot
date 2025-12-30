@@ -806,24 +806,13 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
         
         logger.info(f"Search - Query: '{user_query}', Country: '{country_filter}', Type: '{job_type_filter}'")
         
+        # Get jobs from backend
         if not user_query.strip():
             jobs = get_all_jobs()
         else:
             jobs = find_jobs_from_sentence(user_query)
         
-        if country_filter:
-            jobs = [
-                job for job in jobs
-                if country_filter.lower() in job.get("Location", "").lower()
-            ]
-        
-        if job_type_filter:
-            job_type_lower = job_type_filter.lower()
-            jobs = [
-                job for job in jobs
-                if job_type_lower in job.get("Job Type", "").lower()
-            ]
-        
+        # Convert to the same format as /jobs endpoint
         complete_jobs = []
         for idx, job in enumerate(jobs):
             job_dict = dict(job)
@@ -853,6 +842,19 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             
             complete_jobs.append(complete_job)
         
+        # NOW filter using the correct lowercase keys
+        if country_filter:
+            complete_jobs = [
+                job for job in complete_jobs
+                if country_filter.lower() in str(job.get("location", "")).lower()
+            ]
+        
+        if job_type_filter:
+            complete_jobs = [
+                job for job in complete_jobs
+                if job_type_filter.lower() in str(job.get("job_type", "")).lower()
+            ]
+        
         filters_applied = []
         if user_query:
             filters_applied.append(f"query '{user_query}'")
@@ -873,7 +875,7 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             },
             "message": f"Found {len(complete_jobs)} job(s) matching {filter_text}.",
             "available_filters": {
-                "countries": ["Ghana", "Nigeria", "Kenya", "Remote"],
+                "countries": ["Botswana","Cambodia","Cameroon","Congo","Ethiopia", "Gambia","Ghana", "Kenya", "Lesotho", "Liberia", "Malawi", "Namibia", "Nigeria", "Rwanda", "Sierra Leone", "South Africa", "Uganda", "Zambia", "Zimbabwe", "Remote"],
                 "job_types": ["Remote", "On-site", "Hybrid", "Part-time", "Full-time"]
             }
         })
@@ -884,7 +886,6 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             status_code=500,
             content={"error": "Search failed", "details": str(e)}
         )
-
 
 @app.post("/cv-job-match")
 async def analyze_cv_job_match_hybrid_endpoint(
