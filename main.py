@@ -731,12 +731,15 @@ async def welcome_user(request: Request, session: str = Depends(verify_session))
         "response": welcome_message
     })
 
-
 @app.get("/jobs")
 async def get_all_available_jobs(session: str = Depends(verify_session)):
     try:
         jobs = get_all_jobs()  # This now loads fresh from Google Sheet each time
         logger.info(f"Fetching all {len(jobs)} available jobs")
+        
+        # Extract unique locations and job types from actual data
+        unique_locations = set()
+        unique_job_types = set()
         
         complete_jobs = []
         for idx, job in enumerate(jobs):
@@ -752,14 +755,26 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
                 "N/A"
             )
             
+            # Extract location
+            location = job_dict.get("Location", "N/A")
+            if location and location != "N/A":
+                # Handle comma-separated locations
+                locations = [loc.strip() for loc in location.split(',')]
+                unique_locations.update(locations)
+            
+            # Extract job type
+            job_type = job_dict.get("Job Type", "N/A")
+            if job_type and job_type != "N/A":
+                unique_job_types.add(job_type.strip())
+            
             complete_job = {
                 "job_id": idx,
                 "job_title": job_dict.get("Job Title", "N/A"),
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
-                "job_type": job_dict.get("Job Type", "N/A"),
+                "job_type": job_type,
                 "industry": job_dict.get("Industry", "N/A"),
                 "job_description": description,
-                "location": job_dict.get("Location", "N/A"),
+                "location": location,
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
                 "skills_required": job_dict.get("Skills Required", "N/A"),
@@ -772,13 +787,23 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
             }
             
             complete_jobs.append(complete_job)
-            
+        
+        # Sort locations and job types for better UX
+        sorted_locations = sorted(list(unique_locations))
+        sorted_job_types = sorted(list(unique_job_types))
+        
         logger.info(f"Successfully formatted {len(complete_jobs)} jobs")
+        logger.info(f"Found {len(sorted_locations)} unique locations: {sorted_locations}")
+        logger.info(f"Found {len(sorted_job_types)} unique job types: {sorted_job_types}")
         
         return JSONResponse({
             "jobs": complete_jobs,
             "total_jobs": len(complete_jobs),
             "message": f"Showing all {len(complete_jobs)} available job(s).",
+            "available_filters": {
+                "countries": sorted_locations,  # Dynamic from actual data
+                "job_types": sorted_job_types    # Dynamic from actual data
+            },
             "suggestions": [
                 "Analyze your CV against a job",
                 "Get CV feedback",
@@ -806,13 +831,14 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
         
         logger.info(f"Search - Query: '{user_query}', Country: '{country_filter}', Type: '{job_type_filter}'")
         
-        # Get jobs from backend
         if not user_query.strip():
             jobs = get_all_jobs()
         else:
             jobs = find_jobs_from_sentence(user_query)
         
-        # Convert to the same format as /jobs endpoint
+        unique_locations = set()
+        unique_job_types = set()
+        
         complete_jobs = []
         for idx, job in enumerate(jobs):
             job_dict = dict(job)
@@ -827,14 +853,24 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
                 "N/A"
             )
             
+            location = job_dict.get("Location", "N/A")
+            job_type = job_dict.get("Job Type", "N/A")
+            
+            # Collect unique values for filters
+            if location and location != "N/A":
+                locations = [loc.strip() for loc in location.split(',')]
+                unique_locations.update(locations)
+            if job_type and job_type != "N/A":
+                unique_job_types.add(job_type.strip())
+            
             complete_job = {
                 "job_id": idx,
                 "job_title": job_dict.get("Job Title", "N/A"),
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
-                "job_type": job_dict.get("Job Type", "N/A"),
+                "job_type": job_type,
                 "industry": job_dict.get("Industry", "N/A"),
                 "job_description": description,
-                "location": job_dict.get("Location", "N/A"),
+                "location": location,
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
                 "skills_required": job_dict.get("Skills Required", "N/A"),
@@ -842,7 +878,6 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             
             complete_jobs.append(complete_job)
         
-        # NOW filter using the correct lowercase keys
         if country_filter:
             complete_jobs = [
                 job for job in complete_jobs
@@ -865,6 +900,9 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
         
         filter_text = " and ".join(filters_applied) if filters_applied else "no filters"
         
+        sorted_locations = sorted(list(unique_locations))
+        sorted_job_types = sorted(list(unique_job_types))
+        
         return JSONResponse({
             "jobs": complete_jobs,
             "total_found": len(complete_jobs),
@@ -875,8 +913,8 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             },
             "message": f"Found {len(complete_jobs)} job(s) matching {filter_text}.",
             "available_filters": {
-                "countries": ["Botswana","Cambodia","Cameroon","Congo","Ethiopia", "Gambia","Ghana", "Kenya", "Lesotho", "Liberia", "Malawi", "Namibia", "Nigeria", "Rwanda", "Sierra Leone", "South Africa", "Uganda", "Zambia", "Zimbabwe", "Remote"],
-                "job_types": ["Remote", "On-site", "Hybrid", "Part-time", "Full-time"]
+                "countries": sorted_locations,  
+                "job_types": sorted_job_types    
             }
         })
         
