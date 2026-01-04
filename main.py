@@ -731,14 +731,17 @@ async def welcome_user(request: Request, session: str = Depends(verify_session))
         "response": welcome_message
     })
 
+# Updated /jobs endpoint with proper location parsing and industry filter
+
 @app.get("/jobs")
 async def get_all_available_jobs(session: str = Depends(verify_session)):
     try:
         jobs = get_all_jobs()  # This now loads fresh from Google Sheet each time
         logger.info(f"Fetching all {len(jobs)} available jobs")
         
-        # Extract unique locations and job types from actual data
+        # Extract unique locations, industries, and job types from actual data
         unique_locations = set()
+        unique_industries = set()
         unique_job_types = set()
         
         complete_jobs = []
@@ -755,12 +758,22 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
                 "N/A"
             )
             
-            # Extract location
+            # Extract and parse location - only split by comma
             location = job_dict.get("Location", "N/A")
             if location and location != "N/A":
-                # Handle comma-separated locations
-                locations = [loc.strip() for loc in location.split(',')]
-                unique_locations.update(locations)
+                # Only split by comma - keeps "Africa (Remote – Africa-based)" together
+                location_parts = location.split(',')
+                
+                for part in location_parts:
+                    clean_location = part.strip()
+                    if clean_location and clean_location != 'N/A':
+                        # Keep the location as-is, just trim whitespace
+                        unique_locations.add(clean_location)
+            
+            # Extract industry
+            industry = job_dict.get("Industry", "N/A")
+            if industry and industry != "N/A":
+                unique_industries.add(industry.strip())
             
             # Extract job type
             job_type = job_dict.get("Job Type", "N/A")
@@ -772,9 +785,9 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
                 "job_title": job_dict.get("Job Title", "N/A"),
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
                 "job_type": job_type,
-                "industry": job_dict.get("Industry", "N/A"),
+                "industry": industry,
                 "job_description": description,
-                "location": location,
+                "location": location,  # Keep original format for display
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
                 "application_deadline": job_dict.get("Application Deadline", "N/A"),
                 "skills_required": job_dict.get("Skills Required", "N/A"),
@@ -788,12 +801,14 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
             
             complete_jobs.append(complete_job)
         
-        # Sort locations and job types for better UX
+        # Sort for better UX
         sorted_locations = sorted(list(unique_locations))
+        sorted_industries = sorted(list(unique_industries))
         sorted_job_types = sorted(list(unique_job_types))
         
         logger.info(f"Successfully formatted {len(complete_jobs)} jobs")
         logger.info(f"Found {len(sorted_locations)} unique locations: {sorted_locations}")
+        logger.info(f"Found {len(sorted_industries)} unique industries: {sorted_industries}")
         logger.info(f"Found {len(sorted_job_types)} unique job types: {sorted_job_types}")
         
         return JSONResponse({
@@ -801,8 +816,9 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
             "total_jobs": len(complete_jobs),
             "message": f"Showing all {len(complete_jobs)} available job(s).",
             "available_filters": {
-                "countries": sorted_locations,  # Dynamic from actual data
-                "job_types": sorted_job_types    # Dynamic from actual data
+                "countries": sorted_locations,    # Dynamic from actual data
+                "industries": sorted_industries,  # Dynamic from actual data
+                "job_types": sorted_job_types     # Dynamic from actual data
             },
             "suggestions": [
                 "Analyze your CV against a job",
@@ -821,24 +837,30 @@ async def get_all_available_jobs(session: str = Depends(verify_session)):
             content={"error": "Failed to fetch jobs", "details": str(e)}
         )
 
+
 @app.post("/search-jobs")
 async def search_jobs(request: Request, session: str = Depends(verify_session)):
     try:
         data = await request.json()
         user_query = data.get("query", "")
         country_filter = data.get("country", "").strip()
+        industry_filter = data.get("industry", "").strip()
         job_type_filter = data.get("job_type", "").strip()
         
-        logger.info(f"Search - Query: '{user_query}', Country: '{country_filter}', Type: '{job_type_filter}'")
+        logger.info(f"Search - Query: '{user_query}', Country: '{country_filter}', Industry: '{industry_filter}', Type: '{job_type_filter}'")
         
+        # Get jobs from backend
         if not user_query.strip():
             jobs = get_all_jobs()
         else:
             jobs = find_jobs_from_sentence(user_query)
         
+        # Extract unique values for filter options
         unique_locations = set()
+        unique_industries = set()
         unique_job_types = set()
         
+        # Convert to the same format as /jobs endpoint
         complete_jobs = []
         for idx, job in enumerate(jobs):
             job_dict = dict(job)
@@ -854,12 +876,21 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             )
             
             location = job_dict.get("Location", "N/A")
+            industry = job_dict.get("Industry", "N/A")
             job_type = job_dict.get("Job Type", "N/A")
             
             # Collect unique values for filters
             if location and location != "N/A":
-                locations = [loc.strip() for loc in location.split(',')]
-                unique_locations.update(locations)
+                # Only split by comma
+                location_parts = location.split(',')
+                for part in location_parts:
+                    clean_location = part.strip()
+                    if clean_location and clean_location != 'N/A':
+                        unique_locations.add(clean_location)
+            
+            if industry and industry != "N/A":
+                unique_industries.add(industry.strip())
+            
             if job_type and job_type != "N/A":
                 unique_job_types.add(job_type.strip())
             
@@ -868,7 +899,7 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
                 "job_title": job_dict.get("Job Title", "N/A"),
                 "company_name": job_dict.get("Company Name", job_dict.get("Company", "N/A")),
                 "job_type": job_type,
-                "industry": job_dict.get("Industry", "N/A"),
+                "industry": industry,
                 "job_description": description,
                 "location": location,
                 "application_link": job_dict.get("Application Link or Email", job_dict.get("Application Link", "N/A")),
@@ -878,12 +909,25 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             
             complete_jobs.append(complete_job)
         
+        # NOW filter using the correct lowercase keys
+        # Country filter - match exact location strings (split by comma)
         if country_filter:
             complete_jobs = [
                 job for job in complete_jobs
-                if country_filter.lower() in str(job.get("location", "")).lower()
+                if job.get("location") and any(
+                    country_filter == loc.strip()
+                    for loc in job.get("location", "").split(',')
+                )
             ]
         
+        # Industry filter
+        if industry_filter:
+            complete_jobs = [
+                job for job in complete_jobs
+                if industry_filter.lower() in str(job.get("industry", "")).lower()
+            ]
+        
+        # Job type filter
         if job_type_filter:
             complete_jobs = [
                 job for job in complete_jobs
@@ -895,12 +939,16 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             filters_applied.append(f"query '{user_query}'")
         if country_filter:
             filters_applied.append(f"country '{country_filter}'")
+        if industry_filter:
+            filters_applied.append(f"industry '{industry_filter}'")
         if job_type_filter:
             filters_applied.append(f"type '{job_type_filter}'")
         
         filter_text = " and ".join(filters_applied) if filters_applied else "no filters"
         
+        # Sort for response
         sorted_locations = sorted(list(unique_locations))
+        sorted_industries = sorted(list(unique_industries))
         sorted_job_types = sorted(list(unique_job_types))
         
         return JSONResponse({
@@ -909,12 +957,14 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             "filters_applied": {
                 "query": user_query if user_query else None,
                 "country": country_filter if country_filter else None,
+                "industry": industry_filter if industry_filter else None,
                 "job_type": job_type_filter if job_type_filter else None
             },
             "message": f"Found {len(complete_jobs)} job(s) matching {filter_text}.",
             "available_filters": {
-                "countries": sorted_locations,  
-                "job_types": sorted_job_types    
+                "countries": sorted_locations,    # Dynamic from actual data
+                "industries": sorted_industries,  # Dynamic from actual data
+                "job_types": sorted_job_types     # Dynamic from actual data
             }
         })
         
