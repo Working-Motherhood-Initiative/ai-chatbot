@@ -104,6 +104,37 @@ def is_deadline_expired(deadline_str):
     return False
 
 
+def parse_timestamp(timestamp_str):
+    """Parse timestamp string to datetime object for sorting"""
+    if not timestamp_str or timestamp_str.strip() == "":
+        return datetime.min
+    
+    timestamp_str = str(timestamp_str).strip()
+    
+    # Try common timestamp formats
+    timestamp_formats = [
+        "%Y-%m-%d %H:%M:%S",     # 2025-01-05 14:30:00
+        "%m/%d/%Y %H:%M:%S",     # 01/05/2025 14:30:00
+        "%d/%m/%Y %H:%M:%S",     # 05/01/2025 14:30:00
+        "%Y-%m-%d",              # 2025-01-05
+        "%m/%d/%Y",              # 01/05/2025
+        "%d/%m/%Y",              # 05/01/2025
+        "%Y/%m/%d %H:%M:%S",     # 2025/01/05 14:30:00
+        "%d.%m.%Y %H:%M:%S",     # 05.01.2025 14:30:00
+        "%Y-%m-%dT%H:%M:%S",     # ISO format: 2025-01-05T14:30:00
+        "%Y-%m-%dT%H:%M:%S.%fZ", # ISO with microseconds: 2025-01-05T14:30:00.123456Z
+    ]
+    
+    for fmt in timestamp_formats:
+        try:
+            return datetime.strptime(timestamp_str, fmt)
+        except ValueError:
+            continue
+    
+    logger.warning(f"Could not parse timestamp format: {timestamp_str}")
+    return datetime.min
+
+
 def get_all_jobs(exclude_expired=True):
     try:
         df = load_jobs_from_google_sheet()
@@ -116,10 +147,19 @@ def get_all_jobs(exclude_expired=True):
                 if not is_deadline_expired(job.get("Application Deadline", ""))
             ]
             logger.info(f"Returning {len(active_jobs)} active jobs (excluded {len(jobs_data) - len(active_jobs)} expired)")
-            return active_jobs
+            jobs_to_return = active_jobs
         else:
             logger.info(f"Returning all {len(jobs_data)} jobs (including expired)")
-            return jobs_data
+            jobs_to_return = jobs_data
+        
+        # Sort by timestamp - most recent first
+        jobs_to_return.sort(
+            key=lambda job: parse_timestamp(job.get("Timestamp", "")),
+            reverse=True
+        )
+        
+        logger.info(f"Jobs sorted by timestamp (most recent first)")
+        return jobs_to_return
             
     except Exception as e:
         logger.error(f"Error in get_all_jobs: {type(e).__name__}: {str(e)}", exc_info=True)
