@@ -975,14 +975,16 @@ async def search_jobs(request: Request, session: str = Depends(verify_session)):
             content={"error": "Search failed", "details": str(e)}
         )
 
+
 @app.post("/cv-job-match")
 async def analyze_cv_job_match_hybrid_endpoint(
     file: UploadFile = File(...), 
     jobTitle: str = Form(...),
     company: str = Form(...),
     jobDescription: str = Form(...),
+    skillsRequired: str = Form(default=""),  
     session: str = Depends(verify_session)
-):
+ ):
     try:
         validate_file_size(file)
         
@@ -1001,10 +1003,15 @@ async def analyze_cv_job_match_hybrid_endpoint(
         
         logger.info(f"Analyzing CV for job: {jobTitle} at {company}")
         
-        # Calculate match using your existing analyzer
-        match_result = calculate_cv_job_match_hybrid(cleaned_cv, jobDescription, jobTitle)
+        match_result = calculate_cv_job_match_hybrid(
+            cleaned_cv, 
+            jobDescription, 
+            jobTitle,
+            skillsRequired  
+        )
         ranking = get_match_ranking(match_result["overall_match"])
         
+        combined_job_info = f"{jobDescription}\n\nRequired Skills: {skillsRequired}".strip()
         
         feedback_gen = CareerFeedbackGenerator(openai_client)
         simple_feedback = feedback_gen.generate_detailed_feedback(
@@ -1012,26 +1019,21 @@ async def analyze_cv_job_match_hybrid_endpoint(
             job_title=jobTitle,
             company=company,
             cv_content=cleaned_cv,
-            job_description=jobDescription
+            job_description=combined_job_info  
         )
         
-        # Return CLEAN, SIMPLE response
         return JSONResponse({
             "status": "success",
             
-            # Match percentage and level
             "overall_match_percentage": simple_feedback["match_percentage"],
             "match_level": simple_feedback["match_level"],
             "match_color": ranking["color"],
             
-            # MAIN CONTENT - Two paragraphs
             "strengths": simple_feedback["strengths"],
             "improvements": simple_feedback["improvements"],
             
-            # Detailed scores breakdown
             "scores": simple_feedback["scores"],
             
-            # Privacy info
             "privacy_protection": {
                 "status": privacy_validation["privacy_check_passed"],
                 "reduction_percentage": privacy_validation["statistics"]["reduction_percentage"]
@@ -1043,8 +1045,6 @@ async def analyze_cv_job_match_hybrid_endpoint(
     except Exception as e:
         logger.error(f"CV analysis error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error analyzing CV: {str(e)}")
-
-
 
 
 @app.get("/assessment-questions")

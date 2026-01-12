@@ -96,25 +96,6 @@ def calculate_experience_match(cv_text: str, job_description: str, job_title: st
     return min(100, (exp_score + title_relevance) / 2)
 
 
-def calculate_semantic_similarity(cv_text: str, job_description: str) -> float:
-    try:
-        vectorizer = TfidfVectorizer(
-            stop_words='english',
-            max_features=500,
-            ngram_range=(1, 2)
-        )
-        
-        documents = [cv_text[:2000], job_description[:1000]]
-        tfidf_matrix = vectorizer.fit_transform(documents)
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        
-        return similarity * 100
-        
-    except Exception as e:
-        logger.warning(f"Semantic similarity calculation failed: {e}")
-        return 50.0
-
-
 def find_missing_keywords(cv_text: str, job_description: str) -> List[str]:
     job_keywords = extract_important_keywords(job_description)
     cv_lower = cv_text.lower()
@@ -131,29 +112,30 @@ def identify_strengths(cv_text: str, job_description: str) -> List[str]:
     return strengths[:5]
 
 
-def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title: str) -> Dict:
-    keyword_score = calculate_keyword_match(cv_text, job_description)
-    skills_score = calculate_skills_match(cv_text, job_description)
-    experience_score = calculate_experience_match(cv_text, job_description, job_title)
-    semantic_score = calculate_semantic_similarity(cv_text, job_description)
+def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title: str,skills_required: str = "") -> Dict:
+    combined_job_text = f"{job_description}\n\nRequired Skills: {skills_required}".strip()
+    
+    keyword_score = calculate_keyword_match(cv_text, combined_job_text)
+    skills_score = calculate_skills_match(cv_text, combined_job_text)
+    experience_score = calculate_experience_match(cv_text, combined_job_text, job_title)
+    
     
     total_score = (
-        keyword_score * 0.30 +
-        skills_score * 0.25 +
-        experience_score * 0.25 +
-        semantic_score * 0.20
+        keyword_score * 0.10 +      
+        skills_score * 0.50 +       
+        experience_score * 0.40    
     )
 
-    missing_keywords = find_missing_keywords(cv_text, job_description)
-    strengths = identify_strengths(cv_text, job_description)
+    missing_keywords = find_missing_keywords(cv_text, combined_job_text)
+    strengths = identify_strengths(cv_text, combined_job_text)
     
     return {
         "overall_match": round(total_score),
         "breakdown": {
             "keyword_match": round(keyword_score),
             "skills_match": round(skills_score), 
-            "experience_match": round(experience_score),
-            "semantic_similarity": round(semantic_score)
+            "experience_match": round(experience_score)
+            # semantic_similarity removed
         },
         "missing_keywords": missing_keywords,
         "strengths": strengths
