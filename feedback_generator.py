@@ -38,7 +38,6 @@ class CareerFeedbackGenerator:
                 "strengths": strengths_para,
                 "improvements": improvements_para,
                 "scores": {
-                    "keyword_match": match_result["breakdown"]["keyword_match"],
                     "skills_match": match_result["breakdown"]["skills_match"],
                     "experience_match": match_result["breakdown"]["experience_match"]
                 }

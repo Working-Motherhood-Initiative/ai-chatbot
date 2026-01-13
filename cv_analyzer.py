@@ -112,35 +112,33 @@ def identify_strengths(cv_text: str, job_description: str) -> List[str]:
     return strengths[:5]
 
 
-def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title: str,skills_required: str = "") -> Dict:
+def calculate_cv_job_match_hybrid(cv_text: str, job_description: str, job_title: str, skills_required: str = "") -> Dict:
     combined_job_text = f"{job_description}\n\nRequired Skills: {skills_required}".strip()
     
-    keyword_score = calculate_keyword_match(cv_text, combined_job_text)
     skills_score = calculate_skills_match(cv_text, combined_job_text)
     experience_score = calculate_experience_match(cv_text, combined_job_text, job_title)
     
-    
     total_score = (
-        keyword_score * 0.10 +      
-        skills_score * 0.50 +       
-        experience_score * 0.40    
+        skills_score * 0.60 +       
+        experience_score * 0.40     
     )
 
+    # Still find missing keywords for feedback purposes
     missing_keywords = find_missing_keywords(cv_text, combined_job_text)
     strengths = identify_strengths(cv_text, combined_job_text)
+    
+    logger.info(f"Overall match: {round(total_score)}% (skills: {round(skills_score)}%, experience: {round(experience_score)}%)")
     
     return {
         "overall_match": round(total_score),
         "breakdown": {
-            "keyword_match": round(keyword_score),
             "skills_match": round(skills_score), 
             "experience_match": round(experience_score)
-            # semantic_similarity removed
+            # keyword_match removed
         },
         "missing_keywords": missing_keywords,
         "strengths": strengths
     }
-
 
 def get_match_ranking(overall_score: int) -> Dict[str, str]:
     if overall_score >= 80:
