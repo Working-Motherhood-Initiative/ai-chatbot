@@ -1296,66 +1296,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         }
     )
 
-@app.post("/translate")
-async def translate_text(request: Request, session: str = Depends(verify_session)):
-    try:
-        data = await request.json()
-        lang = data.get("language", "English")
-        welcome = data.get("welcome", "")
-        suggestions = data.get("suggestions", [])
 
-        if lang == "English":
-            return JSONResponse({
-                "welcome": welcome,
-                "suggestions": suggestions
-            })
-
-        suggestions_numbered = "\n".join(
-            f"{i+1}. {s}" for i, s in enumerate(suggestions)
-        )
-
-        prompt = f"""Translate the following into {lang}. Return ONLY a JSON object with exactly this structure, no extra text, no markdown backticks:
-{{
-  "welcome": "<translated welcome message>",
-  "suggestions": ["<1>", "<2>", "<3>", "<4>", "<5>", "<6>", "<7>", "<8>", "<9>", "<10>"]
-}}
-
-Welcome message:
-"{welcome}"
-
-Suggestions (keep the same order):
-{suggestions_numbered}
-
-Keep the meaning natural and clear in {lang}. The audience is African working mothers."""
-
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1000
-        )
-
-        raw = response.choices[0].message.content.strip()
-        clean = raw.replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(clean)
-
-        return JSONResponse({
-            "welcome": parsed.get("welcome", welcome),
-            "suggestions": parsed.get("suggestions", suggestions)
-        })
-
-    except json.JSONDecodeError as e:
-        logger.error(f"Translation JSON parse error: {e}")
-        return JSONResponse({
-            "welcome": welcome,
-            "suggestions": suggestions
-        })
-    except Exception as e:
-        logger.error(f"Translation error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Translation failed", "details": str(e)}
-        )
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}")
