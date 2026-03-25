@@ -706,4 +706,8 @@ if __name__ == "__main__":
     logger.info("Starting Motherboard Career Assistant API (v2)...")
     logger.info("Privacy Protection: ENABLED")
     logger.info("Session Management: ENABLED")
+<<<<<<< HEAD
     uvicorn.run(app, host="0.0.0.0", port=8000)
+=======
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
+>>>>>>> a4104fba6114edda40d7e6e7d5b43d28965c7e03
