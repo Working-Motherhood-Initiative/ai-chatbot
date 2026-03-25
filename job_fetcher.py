@@ -38,7 +38,7 @@ def load_jobs_from_google_sheet():
         sheet = gs_client.open_by_key(GOOGLE_SHEET_ID)
         
         # Get the "Jobs" worksheet
-        worksheet = sheet.worksheet("Jobs")
+        worksheet = sheet.worksheet("Parsed Jobs")
         logger.info(f"Successfully opened worksheet: {worksheet.title}")
         
         # Get all values
