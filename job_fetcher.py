@@ -71,18 +71,31 @@ def is_deadline_expired(deadline_str):
         logger.info("No deadline specified - treating as active posting")
         return False
     
-    deadline_str = str(deadline_str).strip()
+    deadline_str = str(deadline_str).strip().lower()
+    
+    # Handle common non-date deadline formats
+    non_date_indicators = ["asap", "immediate", "ongoing", "open", "rolling", "until filled", "tbd", "to be determined"]
+    if any(indicator in deadline_str for indicator in non_date_indicators):
+        logger.info(f"Deadline '{deadline_str}' indicates ongoing/open position - treating as active")
+        return False
+    
     today = datetime.now().date()
     
     date_formats = [
         "%Y-%m-%d",      # 2025-12-31
-        "%m/%d/%Y",      # 12/31/2025
+        "%d/%m/%Y",      # 31/12/2025 (day/month/year - prioritized for your format)
+        "%m/%d/%Y",      # 12/31/2025 (month/day/year)
         "%d-%m-%Y",      # 31-12-2025
-        "%d/%m/%Y",      # 31/12/2025
+        "%d/%m/%Y",      # 31/12/2025 (duplicate, but keeping for completeness)
         "%B %d, %Y",     # December 31, 2025
         "%b %d, %Y",     # Dec 31, 2025
         "%Y/%m/%d",      # 2025/12/31
         "%d.%m.%Y",      # 31.12.2025
+        "%m-%d-%Y",      # 12-31-2025
+        "%d %B %Y",      # 31 December 2025
+        "%d %b %Y",      # 31 Dec 2025
+        "%B %d %Y",      # December 31 2025
+        "%b %d %Y",      # Dec 31 2025
     ]
     
     for date_format in date_formats:
@@ -100,7 +113,7 @@ def is_deadline_expired(deadline_str):
         except ValueError:
             continue
     
-    logger.warning(f"Could not parse deadline format: {deadline_str}")
+    logger.warning(f"Could not parse deadline format: '{deadline_str}' - treating as active posting")
     return False
 
 
